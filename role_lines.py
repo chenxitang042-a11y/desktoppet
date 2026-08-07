@@ -219,5 +219,57 @@ class RoleLines:
             self._fingerprint = ""
             self._lines = {}
 
+    # ---- 导出台词编辑 / 读回 ----
+    @property
+    def text_file_path(self):
+        return support_path("角色台词.txt")
+
+    def export_for_editing(self):
+        if not self._lines:
+            return None
+        out = ["# 场景台词(按你的角色设定生成的)",
+               "# 格式: 场景标识|台词",
+               "# 改完保存,回窗口点「读回台词」。想重新生成点「重新生成台词」。",
+               ""]
+        desc = {sid: d for sid, d in SCENES}
+        for sid in [s for s, _ in SCENES]:
+            pool = self._lines.get(sid)
+            if not pool:
+                continue
+            out.append(f"# {desc.get(sid, sid)}")
+            for line in pool:
+                out.append(f"{sid}|{line}")
+            out.append("")
+        try:
+            with open(self.text_file_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(out))
+        except Exception:
+            return None
+        return self.text_file_path
+
+    def import_from_editing(self):
+        try:
+            with open(self.text_file_path, "r", encoding="utf-8") as f:
+                raw = f.read()
+        except Exception:
+            return False
+        parsed = {}
+        for line in raw.splitlines():
+            s = line.strip()
+            if s.startswith("#") or "|" not in s:
+                continue
+            sid, _, content = s.partition("|")
+            sid = sid.strip()
+            content = content.strip()
+            if content:
+                parsed.setdefault(sid, []).append(content)
+        if not parsed:
+            return False
+        self._lines = parsed
+        self._fingerprint = self._current_fingerprint()
+        self._used = {}
+        self.save()
+        return True
+
 
 role_lines = RoleLines()

@@ -32,6 +32,8 @@ from weather_monitor import weather
 from mood_system import mood
 import festival_events
 import system_monitor
+from lock_monitor import LockWatcher
+from failure_log import failure_log
 
 
 class Pet(QWidget):
@@ -75,6 +77,7 @@ class Pet(QWidget):
         self._activity = "other"       # 当前判定的活动
         self._activity_locked = False  # 拖动/说话时不被活动状态覆盖
         self._sleeping = False         # 是否因长时间无操作在睡觉
+        self._lock = LockWatcher()
 
         # 点击检测(区分"点一下说话"和"拖动")
         self._press_pos = None
@@ -151,6 +154,21 @@ class Pet(QWidget):
         self._idle_timer = QTimer(self)
         self._idle_timer.timeout.connect(self._check_idle)
         self._idle_timer.start(15000)
+
+        # 锁屏/解锁检测(每 5 秒)
+        self._lock_timer = QTimer(self)
+        self._lock_timer.timeout.connect(self._check_lock)
+        self._lock_timer.start(5000)
+
+        # 自然眨眼(每几秒随机一次)
+        self._blink_timer = QTimer(self)
+        self._blink_timer.timeout.connect(self._natural_blink)
+        self._blink_timer.start(5000)
+
+        # 失败含糊提示(每 10 分钟看一次要不要提)
+        self._failure_timer = QTimer(self)
+        self._failure_timer.timeout.connect(self._maybe_failure_hint)
+        self._failure_timer.start(600000)
 
     # ---------------- 台词 ----------------
     def say_scene(self, scene, duration_ms=5000):
@@ -277,6 +295,32 @@ class Pet(QWidget):
             self._sleeping = False
             self.say_scene("greet_afternoon", 3000)  # 醒来打个招呼
             self._set_state("idle")
+
+    def _check_lock(self):
+        just_locked, just_unlocked = self._lock.poll()
+        if just_locked:
+            self._sleeping = True
+            self._set_state("sleep")
+        elif just_unlocked:
+            self._sleeping = False
+            self._set_state("idle")
+            self.say_scene("greet_afternoon", 4000)
+
+    def _natural_blink(self):
+        # 只在安静待机时眨,别打断其它动作
+        if self._state == "idle" and not self._busy() and not self._sleeping:
+            if random.random() < 0.6:
+                self._set_state("blink")
+        # 下一次间隔随机化一点
+        self._blink_timer.setInterval(random.randint(4000, 9000))
+
+    def _maybe_failure_hint(self):
+        if self._busy() or self._sleeping:
+            return
+        if failure_log.should_hint():
+            line = role_lines.line("rare") or "好像忘了什么"
+            cx = self.x() + self.width() // 2
+            self._bubble.show_text(line, cx, self.y(), 5000)
 
     # ---------------- 素材 ----------------
     def _load_pixmap(self, path):

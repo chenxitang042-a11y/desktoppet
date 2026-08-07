@@ -10,6 +10,7 @@ import urllib.request
 import urllib.error
 
 from settings import settings
+from failure_log import failure_log
 
 
 class Provider:
@@ -104,10 +105,16 @@ class AIClient:
     def chat(self, system, messages, max_tokens=700, temperature=0.9):
         try:
             if self.provider.format == "anthropic":
-                return self._call_anthropic(system, messages, max_tokens, temperature)
-            return self._call_openai(system, messages, max_tokens, temperature)
+                text, err = self._call_anthropic(system, messages, max_tokens, temperature)
+            else:
+                text, err = self._call_openai(system, messages, max_tokens, temperature)
         except Exception as e:
-            return None, f"出错了:{e}"
+            text, err = None, f"出错了:{e}"
+        if err:
+            failure_log.record("AI", err)
+        else:
+            failure_log.clear("AI")
+        return text, err
 
     def _call_openai(self, system, messages, max_tokens, temperature):
         url = f"{self.host}/chat/completions"

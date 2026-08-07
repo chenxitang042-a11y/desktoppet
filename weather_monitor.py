@@ -7,6 +7,7 @@ import threading
 import urllib.request
 
 from settings import settings
+from failure_log import failure_log
 
 
 def _classify(text):
@@ -42,13 +43,14 @@ class WeatherMonitor:
             )
             with urllib.request.urlopen(req, timeout=10) as resp:
                 text = resp.read().decode("utf-8", "ignore").strip()
+            failure_log.clear("天气")
             kind = _classify(text)
             if kind != self.current:
                 self.current = kind
                 if self._on_change:
                     self._on_change(kind)
-        except Exception:
-            pass   # 静默失败
+        except Exception as e:
+            failure_log.record("天气", f"获取失败:{e}")
 
 
 weather = WeatherMonitor()

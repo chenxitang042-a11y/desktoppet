@@ -1,4 +1,8 @@
 """设置窗口。两个标签页:对话(AI 配置) + 角色(人设)。"""
+import os
+import subprocess
+import sys
+
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QTabWidget,
@@ -20,6 +24,19 @@ class _TestWorker(QThread):
         self.done.emit(ok, msg)
 
 
+class _PreviewWorker(QThread):
+    done = Signal(str)
+
+    def __init__(self, text):
+        super().__init__()
+        self._text = text
+
+    def run(self):
+        import ai_service
+        reply = ai_service.preview(self._text)
+        self.done.emit(reply)
+
+
 class SettingsWindow(QWidget):
     changed = Signal()          # 设置变动时通知主程序刷新状态
     scale_changed = Signal(float)   # 角色大小变动时,让主程序实时缩放
@@ -34,9 +51,30 @@ class SettingsWindow(QWidget):
         tabs.addTab(self._build_ai_tab(), "对话")
         tabs.addTab(self._build_role_tab(), "角色")
         tabs.addTab(self._build_appearance_tab(), "外观")
+        tabs.addTab(self._build_problems_tab(), "最近的问题")
 
         root = QVBoxLayout(self)
         root.addWidget(tabs)
+
+    # ---------- 最近的问题 ----------
+    def _build_problems_tab(self):
+        from failure_log import failure_log
+        w = QWidget()
+        v = QVBoxLayout(w)
+        tip = QLabel("这里记录最近哪些功能没取到数据(比如天气拉取失败、AI 报错)。"
+                     "功能恢复后会自动消失。")
+        tip.setWordWrap(True)
+        tip.setStyleSheet("color:#888; font-size:12px;")
+        v.addWidget(tip)
+        self._problems = QTextEdit()
+        self._problems.setReadOnly(True)
+        v.addWidget(self._problems, 1)
+        refresh = QPushButton("刷新")
+        refresh.clicked.connect(
+            lambda: self._problems.setPlainText(failure_log.summary()))
+        v.addWidget(refresh)
+        self._problems.setPlainText(failure_log.summary())
+        return w
 
     # ---------- 外观标签页 ----------
     def _build_appearance_tab(self):
@@ -282,6 +320,54 @@ class SettingsWindow(QWidget):
         self._role_saved.setStyleSheet("color:#3a3; font-size:12px;")
         v.addWidget(self._role_saved)
 
+        # 大段编辑:导出 txt / 读回
+        v.addSpacing(8)
+        edit_lbl = QLabel("嫌输入框小?可以导出成文本文件大段编辑,改完读回:")
+        edit_lbl.setWordWrap(True)
+        edit_lbl.setStyleSheet("color:#888; font-size:12px;")
+        v.addWidget(edit_lbl)
+        er = QHBoxLayout()
+        exp_btn = QPushButton("导出为文本编辑")
+        exp_btn.clicked.connect(self._export_role_text)
+        er.addWidget(exp_btn)
+        imp_btn = QPushButton("从文件读回")
+        imp_btn.clicked.connect(self._import_role_text)
+        er.addWidget(imp_btn)
+        v.addLayout(er)
+
+        # 试一下台词
+        v.addSpacing(12)
+        pv_lbl = QLabel("试一下它会怎么回(不进聊天记录,方便反复调设定):")
+        pv_lbl.setWordWrap(True)
+        pv_lbl.setStyleSheet("font-weight:bold;")
+        v.addWidget(pv_lbl)
+        self._preview_input = QLineEdit()
+        self._preview_input.setPlaceholderText("输入一句话试试,回车")
+        self._preview_input.returnPressed.connect(self._on_preview)
+        v.addWidget(self._preview_input)
+        self._preview_out = QLabel("")
+        self._preview_out.setWordWrap(True)
+        self._preview_out.setStyleSheet("color:#555; background:#f4f4f4; padding:8px; border-radius:6px;")
+        v.addWidget(self._preview_out)
+
+        # 编辑场景台词
+        v.addSpacing(12)
+        sl_lbl = QLabel("场景台词(点击/问候等)导出编辑、读回:")
+        sl_lbl.setWordWrap(True)
+        sl_lbl.setStyleSheet("color:#888; font-size:12px;")
+        v.addWidget(sl_lbl)
+        sr = QHBoxLayout()
+        sl_exp = QPushButton("导出台词编辑")
+        sl_exp.clicked.connect(self._export_lines)
+        sr.addWidget(sl_exp)
+        sl_imp = QPushButton("读回台词")
+        sl_imp.clicked.connect(self._import_lines)
+        sr.addWidget(sl_imp)
+        v.addLayout(sr)
+        self._lines_status = QLabel("")
+        self._lines_status.setStyleSheet("color:#888; font-size:12px;")
+        v.addWidget(self._lines_status)
+
         v.addStretch(1)
         scroll.setWidget(inner)
         return scroll
@@ -296,3 +382,58 @@ class SettingsWindow(QWidget):
         role_lines.regenerate()   # 人设变了,台词按新设定重生成
         self._role_saved.setText("已保存(台词将按新设定重新生成)")
         self.changed.emit()
+
+    @staticmethod
+    def _open_file(path):
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(path)   # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.run(["open", path])
+            else:
+                subprocess.run(["xdg-open", path])
+        except Exception:
+            pass
+
+    def _export_role_text(self):
+        p = role.export_text()
+        if p:
+            self._open_file(p)
+            self._role_saved.setText("已导出并打开,改完保存,再点「从文件读回」")
+
+    def _import_role_text(self):
+        if role.import_text():
+            # 刷新界面上的输入框
+            for key, edit in self._role_edits.items():
+                if isinstance(edit, QTextEdit):
+                    edit.setPlainText(role.get(key))
+                else:
+                    edit.setText(role.get(key))
+            self._user_desc.setText(role.user_description)
+            role_lines.regenerate()
+            self._role_saved.setText("已读回(台词将按新设定重新生成)")
+        else:
+            self._role_saved.setText("没读到内容,先点「导出为文本编辑」")
+
+    def _on_preview(self):
+        text = self._preview_input.text().strip()
+        if not text:
+            return
+        self._preview_out.setText("……")
+        self._preview_worker = _PreviewWorker(text)
+        self._preview_worker.done.connect(self._preview_out.setText)
+        self._preview_worker.start()
+
+    def _export_lines(self):
+        p = role_lines.export_for_editing()
+        if p:
+            self._open_file(p)
+            self._lines_status.setText("已导出并打开,改完保存,再点「读回台词」")
+        else:
+            self._lines_status.setText("还没有生成的台词。先在「对话」页点「重新生成台词」")
+
+    def _import_lines(self):
+        if role_lines.import_from_editing():
+            self._lines_status.setText("已读回你改的台词")
+        else:
+            self._lines_status.setText("没读到内容,先点「导出台词编辑」")

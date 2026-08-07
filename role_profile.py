@@ -10,7 +10,6 @@ import json
 from paths import support_path
 from settings import settings
 
-
 class Field:
     def __init__(self, key, title, hint, multiline):
         self.key = key
@@ -117,6 +116,73 @@ class RoleProfile:
                 self._values = json.load(f)
         except Exception:
             self._values = {}
+
+    # ---- 导出成 txt 大段编辑 / 读回(移植自 Mac 版)----
+    @property
+    def text_file_path(self):
+        return support_path("角色设定.txt")
+
+    def export_text(self):
+        lines = [
+            "# 角色设定",
+            "#",
+            "# 每一栏的内容会**原样**发给模型,程序不额外加任何性格描述。",
+            "# 改完保存,回窗口里点「从文件读回」。",
+            "#",
+            "# 格式:【栏目名】下面写内容,空行分隔。不要改栏目名。",
+            "",
+        ]
+        for f in FIELDS:
+            lines.append(f"【{f.title}】")
+            v = self.get(f.key).strip()
+            lines.append(v if v else f"# {f.hint.splitlines()[0]}")
+            lines.append("")
+        lines.append("【和你说话的人】")
+        u = self.user_description.strip()
+        lines.append(u if u else "# 你是谁、它该怎么称呼你")
+        try:
+            with open(self.text_file_path, "w", encoding="utf-8") as fp:
+                fp.write("\n".join(lines))
+        except Exception:
+            return None
+        return self.text_file_path
+
+    def import_text(self):
+        try:
+            with open(self.text_file_path, "r", encoding="utf-8") as fp:
+                raw = fp.read()
+        except Exception:
+            return False
+        title_to_key = {f.title: f.key for f in FIELDS}
+        title_to_key["和你说话的人"] = "userDesc"
+
+        result = {}
+        current = None
+        buf = []
+
+        def flush():
+            if current is not None:
+                result[current] = "\n".join(buf).strip()
+
+        for line in raw.splitlines():
+            s = line.strip()
+            if s.startswith("【") and s.endswith("】"):
+                flush()
+                buf = []
+                title = s[1:-1]
+                current = title_to_key.get(title)
+                continue
+            if s.startswith("#"):
+                continue
+            buf.append(line)
+        flush()
+
+        if not result:
+            return False
+        for k, v in result.items():
+            self._values[k] = v
+        self.save()
+        return True
 
 
 role = RoleProfile()
