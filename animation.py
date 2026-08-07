@@ -26,6 +26,9 @@ STATES = {
     "stretch":    (["stretch_001.png"], 900, False),
     "talk":       (["talk.png"], 400, True),
     "dragged":    (["dragged.png"], 400, True),
+    "rain":       (["rain.png"], 900, True),
+    "snow":       (["snow.png"], 900, True),
+    "sunny":      (["sunny.png"], 900, True),
 }
 
 # 待机时会随机穿插的小动作,让它显得"活着"

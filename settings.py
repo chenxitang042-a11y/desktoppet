@@ -18,6 +18,12 @@ _DEFAULTS = {
     "ai_add_framing_note": True, # 是否加那段"用这个身份说话"的收尾提示
     "ai_scene_lines": True,      # 点击/问候等场景台词是否由 AI 按人设生成
 
+    "watch_activity": True,      # 是否根据你在用什么软件改变姿势/台词
+    "watch_battery": True,       # 是否在低电量时提醒
+    "weather_enabled": True,     # 是否获取天气并做反应
+    "birthday": "",              # 生日 MM-DD,到日子它会说生日快乐
+    "idle_sleep_seconds": 300,   # 离开多少秒后桌宠去睡觉
+
     "pet_scale": 1.0,            # 角色显示倍率(原图约 98x116)
     "always_on_top": True,
 }

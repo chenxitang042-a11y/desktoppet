@@ -62,6 +62,44 @@ class SettingsWindow(QWidget):
         hint.setStyleSheet("color:#999; font-size:11px;")
         v.addWidget(hint)
 
+        v.addSpacing(16)
+        behave = QLabel("行为")
+        behave.setStyleSheet("font-weight:bold;")
+        v.addWidget(behave)
+
+        self._watch_activity = QCheckBox("根据你在用什么软件切换姿势/台词(听歌、打字、看网页)")
+        self._watch_activity.setChecked(bool(settings.get("watch_activity")))
+        self._watch_activity.stateChanged.connect(
+            lambda: settings.set("watch_activity", self._watch_activity.isChecked()))
+        v.addWidget(self._watch_activity)
+
+        self._watch_battery = QCheckBox("电脑快没电时提醒")
+        self._watch_battery.setChecked(bool(settings.get("watch_battery")))
+        self._watch_battery.stateChanged.connect(
+            lambda: settings.set("watch_battery", self._watch_battery.isChecked()))
+        v.addWidget(self._watch_battery)
+
+        self._weather = QCheckBox("获取天气,下雨下雪会有反应")
+        self._weather.setChecked(bool(settings.get("weather_enabled")))
+        self._weather.stateChanged.connect(
+            lambda: settings.set("weather_enabled", self._weather.isChecked()))
+        v.addWidget(self._weather)
+
+        bd_row = QHBoxLayout()
+        bd_row.addWidget(QLabel("你的生日(MM-DD,到日子它会说生日快乐)"))
+        self._birthday = QLineEdit(settings.get("birthday"))
+        self._birthday.setPlaceholderText("例如 08-15")
+        self._birthday.setFixedWidth(90)
+        self._birthday.editingFinished.connect(
+            lambda: settings.set("birthday", self._birthday.text().strip()))
+        bd_row.addWidget(self._birthday)
+        v.addLayout(bd_row)
+
+        privacy = QLabel("这两项只在你本机读取,不上传任何信息。")
+        privacy.setWordWrap(True)
+        privacy.setStyleSheet("color:#999; font-size:11px;")
+        v.addWidget(privacy)
+
         v.addStretch(1)
         self._update_scale_label()
         return w

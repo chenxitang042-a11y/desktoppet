@@ -22,8 +22,16 @@ from chat_window import ChatWindow
 from settings_window import SettingsWindow
 from pomodoro_window import PomodoroWindow
 from companion_window import CompanionWindow
+from reminder_window import ReminderWindow
 from role_lines import role_lines
 from companion_record import companion
+from reminder_store import reminders
+import activity_monitor
+from battery_monitor import BatteryWatcher
+from weather_monitor import weather
+from mood_system import mood
+import festival_events
+import system_monitor
 
 
 class Pet(QWidget):
@@ -60,6 +68,13 @@ class Pet(QWidget):
         self._settings_win = None
         self._pomodoro = None
         self._companion = None
+        self._reminder_win = None
+
+        # 系统状态监控
+        self._battery = BatteryWatcher()
+        self._activity = "other"       # 当前判定的活动
+        self._activity_locked = False  # 拖动/说话时不被活动状态覆盖
+        self._sleeping = False         # 是否因长时间无操作在睡觉
 
         # 点击检测(区分"点一下说话"和"拖动")
         self._press_pos = None
@@ -105,6 +120,38 @@ class Pet(QWidget):
         self._chatter_timer.timeout.connect(self._maybe_chatter)
         self._chatter_timer.start(90000)   # 每 90 秒掷一次骰子
 
+        # 看你在用什么软件(每 4 秒看一次当前最前的程序)
+        self._activity_timer = QTimer(self)
+        self._activity_timer.timeout.connect(self._check_activity)
+        self._activity_timer.start(4000)
+
+        # 电量(每 60 秒)
+        self._battery_timer = QTimer(self)
+        self._battery_timer.timeout.connect(self._check_battery)
+        self._battery_timer.start(60000)
+
+        # 提醒到点检查(每 20 秒)
+        self._reminder_timer = QTimer(self)
+        self._reminder_timer.timeout.connect(self._check_reminders)
+        self._reminder_timer.start(20000)
+
+        # 天气(启动拉一次,之后每 30 分钟)
+        weather.set_callback(self._on_weather_change)
+        weather.fetch_async()
+        self._weather_timer = QTimer(self)
+        self._weather_timer.timeout.connect(weather.fetch_async)
+        self._weather_timer.start(30 * 60 * 1000)
+
+        # 心情(每 2 分钟重估)
+        self._mood_timer = QTimer(self)
+        self._mood_timer.timeout.connect(self._reevaluate_mood)
+        self._mood_timer.start(120000)
+
+        # 空闲检测(每 15 秒):人离开一阵就睡觉,回来就醒
+        self._idle_timer = QTimer(self)
+        self._idle_timer.timeout.connect(self._check_idle)
+        self._idle_timer.start(15000)
+
     # ---------------- 台词 ----------------
     def say_scene(self, scene, duration_ms=5000):
         text = role_lines.line(scene)
@@ -116,7 +163,12 @@ class Pet(QWidget):
     def _startup_greeting(self):
         import datetime
         h = datetime.datetime.now().hour
-        # 先看有没有到认识纪念日
+        # 节日 > 认识纪念日 > 按时段问候
+        fest = festival_events.festival_greeting_today()
+        if fest:
+            cx = self.x() + self.width() // 2
+            self._bubble.show_text(fest, cx, self.y(), 6000)
+            return
         milestone = companion.milestone_greeting_if_any()
         if milestone:
             cx = self.x() + self.width() // 2
@@ -133,16 +185,98 @@ class Pet(QWidget):
         self.say_scene(scene)
 
     def _maybe_chatter(self):
-        if self._dragging or self._walking or self._bubble.isVisible():
+        if self._dragging or self._walking or self._bubble.isVisible() or self._sleeping:
+            return
+        # 先看有没有节日
+        fest = festival_events.festival_greeting_today()
+        if fest:
+            cx = self.x() + self.width() // 2
+            self._bubble.show_text(fest, cx, self.y(), 6000)
+            return
+        # 稀有事件(极低概率)
+        rare = festival_events.rare_event_line()
+        if rare:
+            line = role_lines.line("rare") or rare
+            cx = self.x() + self.width() // 2
+            self._bubble.show_text(line, cx, self.y(), 6000)
             return
         import datetime
         h = datetime.datetime.now().hour
-        if random.random() < 0.25:
+        # 心情影响开口概率:话多的心情倍率小 -> 概率高
+        base = 0.25 / max(0.3, mood.chatter_multiplier)
+        if random.random() < base:
             scene = "night" if (h >= 23 or h < 5) else "chatter"
             self.say_scene(scene)
 
     def _reset_click_streak(self):
         self._click_streak = 0
+
+    # ---------------- 系统状态反应 ----------------
+    def _busy(self):
+        """正在被拖、走动、说话时,不让系统状态覆盖当前动作。"""
+        return self._dragging or self._walking or self._bubble.isVisible()
+
+    def _check_activity(self):
+        if not settings.get("watch_activity"):
+            return
+        kind = activity_monitor.current_activity()
+        if kind == self._activity:
+            return
+        self._activity = kind
+        # 换姿势(除非正忙)
+        if not self._busy():
+            state = activity_monitor.ACTIVITY_STATE.get(kind, "idle")
+            self._set_state(state)
+        # 偶尔就着当前活动说一句(不是每次都说,免得烦)
+        scene = activity_monitor.ACTIVITY_SCENE.get(kind)
+        if scene and random.random() < 0.4 and not self._bubble.isVisible():
+            self.say_scene(scene)
+
+    def _check_battery(self):
+        if not settings.get("watch_battery"):
+            return
+        if self._battery.check():
+            self.say_scene("battery_low", 6000)
+
+    def _check_reminders(self):
+        for item in reminders.due_now():
+            text = role_lines.line("reminder_due") or "到点了"
+            full = f"{text}——{item['text']}"
+            cx = self.x() + self.width() // 2
+            self._bubble.show_text(full, cx, self.y(), 8000)
+            self._tray.showMessage("桌宠提醒", item["text"],
+                                   QSystemTrayIcon.Information, 8000)
+
+    def _on_weather_change(self, kind):
+        if self._busy():
+            return
+        pose = {"rain": "rain", "snow": "snow", "clear": "sunny"}.get(kind)
+        if not pose:
+            return
+        self._set_state(pose)
+        if kind == "rain":
+            self.say_scene("weather_rain", 6000)
+        elif kind == "snow":
+            self.say_scene("weather_snow", 6000)
+        # 看完天气姿势过一会儿回待机
+        QTimer.singleShot(6000, lambda: self._set_state("idle")
+                          if not self._busy() and not self._sleeping else None)
+
+    def _reevaluate_mood(self):
+        is_pomo = (self._pomodoro is not None
+                   and getattr(self._pomodoro, "_state", "idle") in ("focus", "break"))
+        mood.reevaluate(is_pomo, self._activity, weather.current)
+
+    def _check_idle(self):
+        secs = system_monitor.idle_seconds()
+        threshold = int(settings.get("idle_sleep_seconds"))
+        if secs >= threshold and not self._sleeping and not self._dragging:
+            self._sleeping = True
+            self._set_state("sleep")
+        elif secs < threshold and self._sleeping:
+            self._sleeping = False
+            self.say_scene("greet_afternoon", 3000)  # 醒来打个招呼
+            self._set_state("idle")
 
     # ---------------- 素材 ----------------
     def _load_pixmap(self, path):
@@ -209,14 +343,15 @@ class Pet(QWidget):
 
     # ---------------- 行为调度 ----------------
     def _decide_behavior(self):
-        if self._dragging or self._walking:
+        if self._dragging or self._walking or self._sleeping:
             return
         if self._state not in ("idle", "blink"):
-            # 正在做某个小动作,先不打断
             if not animation.loops(self._state):
                 return
+        # 走动概率跟随心情
+        stroll = mood.stroll_tendency
         roll = random.random()
-        if roll < 0.35:
+        if roll < stroll * 0.5:
             self._start_walk()
         elif roll < 0.85:
             self._set_state(random.choice(animation.IDLE_BEHAVIORS))
@@ -277,6 +412,9 @@ class Pet(QWidget):
     def mouseReleaseEvent(self, e):
         if e.button() != Qt.LeftButton:
             return
+        mood.record_interaction()
+        if self._sleeping:
+            self._sleeping = False
         if self._moved:
             # 拖动结束,落回地面
             self._dragging = False
@@ -315,6 +453,9 @@ class Pet(QWidget):
         act_comp = QAction("陪伴记录…", m)
         act_comp.triggered.connect(self.open_companion)
         m.addAction(act_comp)
+        act_remind = QAction("提醒…", m)
+        act_remind.triggered.connect(self.open_reminders)
+        m.addAction(act_remind)
         m.addSeparator()
         act_quit = QAction("退出", m)
         act_quit.triggered.connect(QApplication.quit)
@@ -371,6 +512,13 @@ class Pet(QWidget):
         self._companion.show()
         self._companion.raise_()
         self._companion.activateWindow()
+
+    def open_reminders(self):
+        if self._reminder_win is None:
+            self._reminder_win = ReminderWindow()
+        self._reminder_win.show()
+        self._reminder_win.raise_()
+        self._reminder_win.activateWindow()
 
     def _on_settings_changed(self):
         if self._chat is not None:
