@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 
 import ai_service
 from conversation import conversation
+from companion_record import companion
 
 
 class _SendWorker(QThread):
@@ -96,8 +97,7 @@ class ChatWindow(QWidget):
 
     def _on_reply(self, reply, from_ai):
         self._append_line("它", reply)
-        if not from_ai and ai_service.is_available() is False:
-            pass  # 兜底回复,不额外提示
+        companion.note_chat()
         self._send_btn.setEnabled(True)
         self._send_btn.setText("发送")
         self._worker = None

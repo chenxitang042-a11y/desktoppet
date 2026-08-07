@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
 from settings import settings
 from ai_client import client, PROVIDERS, find_provider
 from role_profile import role, FIELDS
+from role_lines import role_lines
 
 
 class _TestWorker(QThread):
@@ -133,6 +134,20 @@ class SettingsWindow(QWidget):
         self._framing.stateChanged.connect(self._save_ai)
         form.addRow(self._framing)
 
+        self._scene_lines = QCheckBox("点击/问候等台词由 AI 按人设生成")
+        self._scene_lines.setChecked(bool(settings.get("ai_scene_lines")))
+        self._scene_lines.stateChanged.connect(self._save_ai)
+        form.addRow(self._scene_lines)
+
+        regen_row = QHBoxLayout()
+        self._regen_btn = QPushButton("重新生成台词")
+        self._regen_btn.clicked.connect(self._on_regen)
+        regen_row.addWidget(self._regen_btn)
+        self._regen_status = QLabel(role_lines.status_text())
+        self._regen_status.setStyleSheet("color:#888; font-size:12px;")
+        regen_row.addWidget(self._regen_status, 1)
+        form.addRow(regen_row)
+
         test_row = QHBoxLayout()
         self._test_btn = QPushButton("测试连接")
         self._test_btn.clicked.connect(self._on_test)
@@ -160,7 +175,12 @@ class SettingsWindow(QWidget):
         settings.set("ai_temperature", self._temp.value())
         settings.set("ai_max_tokens", self._maxtok.value())
         settings.set("ai_add_framing_note", self._framing.isChecked())
+        settings.set("ai_scene_lines", self._scene_lines.isChecked())
         self.changed.emit()
+
+    def _on_regen(self):
+        role_lines.regenerate()
+        self._regen_status.setText("已触发,正在后台按你的设定生成…")
 
     def _on_test(self):
         if self._test_worker is not None:
@@ -235,5 +255,6 @@ class SettingsWindow(QWidget):
             else:
                 role.set(key, edit.text())
         role.user_description = self._user_desc.text()
-        self._role_saved.setText("已保存")
+        role_lines.regenerate()   # 人设变了,台词按新设定重生成
+        self._role_saved.setText("已保存(台词将按新设定重新生成)")
         self.changed.emit()

@@ -20,6 +20,10 @@ from paths import images_dir
 from settings import settings
 from chat_window import ChatWindow
 from settings_window import SettingsWindow
+from pomodoro_window import PomodoroWindow
+from companion_window import CompanionWindow
+from role_lines import role_lines
+from companion_record import companion
 
 
 class Pet(QWidget):
@@ -54,6 +58,17 @@ class Pet(QWidget):
         # 子窗口(延迟创建)
         self._chat = None
         self._settings_win = None
+        self._pomodoro = None
+        self._companion = None
+
+        # 点击检测(区分"点一下说话"和"拖动")
+        self._press_pos = None
+        self._press_global = None
+        self._moved = False
+        self._click_streak = 0
+        self._click_reset_timer = QTimer(self)
+        self._click_reset_timer.setSingleShot(True)
+        self._click_reset_timer.timeout.connect(self._reset_click_streak)
 
         # 气泡
         from speech_bubble import SpeechBubble
@@ -78,6 +93,56 @@ class Pet(QWidget):
         self._move_timer.start(30)
 
         self._build_tray()
+
+        # 台词预生成(后台,按人设)
+        role_lines.generate_if_needed()
+
+        # 开场问候:按时间段 + 里程碑
+        QTimer.singleShot(1500, self._startup_greeting)
+
+        # 偶尔自言自语
+        self._chatter_timer = QTimer(self)
+        self._chatter_timer.timeout.connect(self._maybe_chatter)
+        self._chatter_timer.start(90000)   # 每 90 秒掷一次骰子
+
+    # ---------------- 台词 ----------------
+    def say_scene(self, scene, duration_ms=5000):
+        text = role_lines.line(scene)
+        if not text:
+            return
+        cx = self.x() + self.width() // 2
+        self._bubble.show_text(text, cx, self.y(), duration_ms)
+
+    def _startup_greeting(self):
+        import datetime
+        h = datetime.datetime.now().hour
+        # 先看有没有到认识纪念日
+        milestone = companion.milestone_greeting_if_any()
+        if milestone:
+            cx = self.x() + self.width() // 2
+            self._bubble.show_text(milestone, cx, self.y(), 6000)
+            return
+        if 5 <= h < 12:
+            scene = "greet_morning"
+        elif 12 <= h < 17:
+            scene = "greet_afternoon"
+        elif 17 <= h < 23:
+            scene = "greet_evening"
+        else:
+            scene = "greet_night"
+        self.say_scene(scene)
+
+    def _maybe_chatter(self):
+        if self._dragging or self._walking or self._bubble.isVisible():
+            return
+        import datetime
+        h = datetime.datetime.now().hour
+        if random.random() < 0.25:
+            scene = "night" if (h >= 23 or h < 5) else "chatter"
+            self.say_scene(scene)
+
+    def _reset_click_streak(self):
+        self._click_streak = 0
 
     # ---------------- 素材 ----------------
     def _load_pixmap(self, path):
@@ -189,22 +254,47 @@ class Pet(QWidget):
     # ---------------- 拖动 ----------------
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton:
-            self._dragging = True
-            self._walking = False
+            self._press_global = e.globalPosition().toPoint()
             self._drag_offset = e.globalPosition().toPoint() - self.pos()
-            self._set_state("dragged")
+            self._moved = False
 
     def mouseMoveEvent(self, e):
+        if self._press_global is None:
+            return
+        gp = e.globalPosition().toPoint()
+        if not self._moved:
+            # 移动超过阈值才算拖动,否则当点击
+            if (gp - self._press_global).manhattanLength() > 6:
+                self._moved = True
+                self._dragging = True
+                self._walking = False
+                self.say_scene("pickup", 3000)
+                self._set_state("dragged")
         if self._dragging and self._drag_offset is not None:
-            self.move(e.globalPosition().toPoint() - self._drag_offset)
+            self.move(gp - self._drag_offset)
             self._reposition_bubble()
 
     def mouseReleaseEvent(self, e):
-        if e.button() == Qt.LeftButton and self._dragging:
+        if e.button() != Qt.LeftButton:
+            return
+        if self._moved:
+            # 拖动结束,落回地面
             self._dragging = False
-            # 松手后落回地面高度
             self.move(self.x(), self._ground_y())
+            self.say_scene("drop", 3000)
             self._set_state("idle")
+        else:
+            # 没移动 = 点了一下,按连点次数说不同的话
+            self._click_streak += 1
+            self._click_reset_timer.start(2500)
+            if self._click_streak >= 6:
+                scene = "click_toomuch"
+            elif self._click_streak >= 3:
+                scene = "click_again"
+            else:
+                scene = "click"
+            self.say_scene(scene, 3500)
+        self._press_global = None
 
     def contextMenuEvent(self, e):
         self._menu().exec(e.globalPos())
@@ -218,6 +308,13 @@ class Pet(QWidget):
         act_set = QAction("设置…", m)
         act_set.triggered.connect(self.open_settings)
         m.addAction(act_set)
+        m.addSeparator()
+        act_pomo = QAction("番茄钟…", m)
+        act_pomo.triggered.connect(self.open_pomodoro)
+        m.addAction(act_pomo)
+        act_comp = QAction("陪伴记录…", m)
+        act_comp.triggered.connect(self.open_companion)
+        m.addAction(act_comp)
         m.addSeparator()
         act_quit = QAction("退出", m)
         act_quit.triggered.connect(QApplication.quit)
@@ -256,6 +353,24 @@ class Pet(QWidget):
         self._settings_win.show()
         self._settings_win.raise_()
         self._settings_win.activateWindow()
+
+    def open_pomodoro(self):
+        if self._pomodoro is None:
+            self._pomodoro = PomodoroWindow()
+            self._pomodoro.focus_started.connect(lambda: self.say_scene("pomodoro_start"))
+            self._pomodoro.focus_ended.connect(lambda: self.say_scene("pomodoro_end", 6000))
+            self._pomodoro.break_started.connect(lambda: self.say_scene("break_start"))
+            self._pomodoro.break_ended.connect(lambda: self.say_scene("break_end", 6000))
+        self._pomodoro.show()
+        self._pomodoro.raise_()
+        self._pomodoro.activateWindow()
+
+    def open_companion(self):
+        if self._companion is None:
+            self._companion = CompanionWindow()
+        self._companion.show()
+        self._companion.raise_()
+        self._companion.activateWindow()
 
     def _on_settings_changed(self):
         if self._chat is not None:
