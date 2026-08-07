@@ -3,7 +3,7 @@ from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QTabWidget,
     QLabel, QLineEdit, QComboBox, QCheckBox, QPushButton, QTextEdit,
-    QDoubleSpinBox, QSpinBox, QScrollArea,
+    QDoubleSpinBox, QSpinBox, QScrollArea, QSlider,
 )
 
 from settings import settings
@@ -20,7 +20,8 @@ class _TestWorker(QThread):
 
 
 class SettingsWindow(QWidget):
-    changed = Signal()   # 设置变动时通知主程序刷新状态
+    changed = Signal()          # 设置变动时通知主程序刷新状态
+    scale_changed = Signal(float)   # 角色大小变动时,让主程序实时缩放
 
     def __init__(self):
         super().__init__()
@@ -31,9 +32,48 @@ class SettingsWindow(QWidget):
         tabs = QTabWidget()
         tabs.addTab(self._build_ai_tab(), "对话")
         tabs.addTab(self._build_role_tab(), "角色")
+        tabs.addTab(self._build_appearance_tab(), "外观")
 
         root = QVBoxLayout(self)
         root.addWidget(tabs)
+
+    # ---------- 外观标签页 ----------
+    def _build_appearance_tab(self):
+        w = QWidget()
+        v = QVBoxLayout(w)
+
+        lbl = QLabel("角色大小")
+        lbl.setStyleSheet("font-weight:bold;")
+        v.addWidget(lbl)
+
+        self._scale_value = QLabel()
+        v.addWidget(self._scale_value)
+
+        self._scale_slider = QSlider(Qt.Horizontal)
+        self._scale_slider.setMinimum(30)    # 0.30 倍
+        self._scale_slider.setMaximum(250)   # 2.50 倍
+        cur = int(round(float(settings.get("pet_scale")) * 100))
+        self._scale_slider.setValue(max(30, min(250, cur)))
+        self._scale_slider.valueChanged.connect(self._on_scale)
+        v.addWidget(self._scale_slider)
+
+        hint = QLabel("拖动滑块实时调整。太大就往左拖。")
+        hint.setStyleSheet("color:#999; font-size:11px;")
+        v.addWidget(hint)
+
+        v.addStretch(1)
+        self._update_scale_label()
+        return w
+
+    def _on_scale(self, val):
+        scale = val / 100.0
+        settings.set("pet_scale", scale)
+        self._update_scale_label()
+        self.scale_changed.emit(scale)
+
+    def _update_scale_label(self):
+        s = float(settings.get("pet_scale"))
+        self._scale_value.setText(f"当前:{s:.2f} 倍")
 
     # ---------- 对话标签页 ----------
     def _build_ai_tab(self):

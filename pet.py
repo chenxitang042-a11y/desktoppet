@@ -252,6 +252,7 @@ class Pet(QWidget):
         if self._settings_win is None:
             self._settings_win = SettingsWindow()
             self._settings_win.changed.connect(self._on_settings_changed)
+            self._settings_win.scale_changed.connect(self._on_scale_changed)
         self._settings_win.show()
         self._settings_win.raise_()
         self._settings_win.activateWindow()
@@ -259,6 +260,14 @@ class Pet(QWidget):
     def _on_settings_changed(self):
         if self._chat is not None:
             self._chat.refresh_status()
+
+    def _on_scale_changed(self, scale):
+        """设置里拖动大小滑块时,实时缩放并落回地面。"""
+        self._scale = float(scale)
+        self._pixmap_cache.clear()
+        self._apply_frame()
+        self.move(self.x(), self._ground_y())
+        self._reposition_bubble()
 
     def _on_thinking(self):
         self._walking = False

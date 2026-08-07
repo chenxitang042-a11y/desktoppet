@@ -17,7 +17,7 @@ _DEFAULTS = {
     "ai_memory_turns": 12,       # 保留多少轮对话再开始压缩
     "ai_add_framing_note": True, # 是否加那段"用这个身份说话"的收尾提示
 
-    "pet_scale": 1.6,            # 角色显示倍率(原图约 98x116)
+    "pet_scale": 1.0,            # 角色显示倍率(原图约 98x116)
     "always_on_top": True,
 }
 
