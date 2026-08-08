@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 import animation
 from paths import images_dir
 from settings import settings
-from chat_window import ChatWindow
+from chat_window import ChatInput, ChatHistoryWindow
 from settings_window import SettingsWindow
 from pomodoro_window import PomodoroWindow
 from companion_window import CompanionWindow
@@ -67,6 +67,7 @@ class Pet(QWidget):
 
         # 子窗口(延迟创建)
         self._chat = None
+        self._history = None
         self._settings_win = None
         self._pomodoro = None
         self._companion = None
@@ -103,7 +104,7 @@ class Pet(QWidget):
         # 行为调度:每隔几秒决定下一步做什么
         self._behavior_timer = QTimer(self)
         self._behavior_timer.timeout.connect(self._decide_behavior)
-        self._behavior_timer.start(4000)
+        self._behavior_timer.start(9000)
 
         # 走动步进
         self._move_timer = QTimer(self)
@@ -353,10 +354,10 @@ class Pet(QWidget):
     def _natural_blink(self):
         # 只在安静待机时眨,别打断其它动作
         if self._state == "idle" and not self._busy() and not self._sleeping:
-            if random.random() < 0.6:
+            if random.random() < 0.4:
                 self._set_state("blink")
-        # 下一次间隔随机化一点
-        self._blink_timer.setInterval(random.randint(4000, 9000))
+        # 下一次间隔随机化一点(不要太频繁)
+        self._blink_timer.setInterval(random.randint(7000, 14000))
 
     def _maybe_failure_hint(self):
         if self._busy() or self._sleeping or not settings.get("failure_hint"):
@@ -519,21 +520,39 @@ class Pet(QWidget):
 
     # ---------------- 行为调度 ----------------
     def _decide_behavior(self):
-        if self._dragging or self._walking or self._sleeping:
+        # 下次间隔随机化,避免机械的节律感
+        self._behavior_timer.setInterval(random.randint(7000, 15000))
+        if self._dragging or self._walking or self._sleeping or self._fs_hidden:
             return
-        if self._state not in ("idle", "blink"):
-            if not animation.loops(self._state):
-                return
-        # 走动概率跟随心情(可关);未开心情则用固定倾向
+        # 只有在安静待机时才考虑做事;正在做别的(小动作/活动姿势)就让它自然回到待机
+        if self._state != "idle":
+            return
+
         stroll = mood.stroll_tendency if settings.get("mood_enabled") else 0.4
         if not settings.get("auto_stroll"):
             stroll = 0.0
+
         roll = random.random()
-        if roll < stroll * 0.5:
+        if roll < stroll * 0.25:        # 偶尔散个步
             self._start_walk()
-        elif roll < 0.85:
-            self._set_state(random.choice(animation.IDLE_BEHAVIORS))
+        elif roll < 0.45:               # 偶尔做个短动作
+            self._do_fidget()
+        # 其余大部分时间:保持安静待机,不换动作
+
+    def _do_fidget(self):
+        # 短动作:做完自动回到待机。不含 sleep(睡觉只在真正离开时)
+        action = random.choice(["blink", "stretch", "wave", "glasses", "think", "read"])
+        self._set_state(action)
+        # 伸懒腰限制在 3 秒内,其它 2.5~4.5 秒
+        if action == "stretch":
+            dur = random.randint(1800, 2800)
         else:
+            dur = random.randint(2500, 4500)
+        QTimer.singleShot(dur, self._return_idle)
+
+    def _return_idle(self):
+        if (not self._dragging and not self._walking and not self._sleeping
+                and self._state not in ("idle", "walk", "dragged", "sleep")):
             self._set_state("idle")
 
     # ---------------- 走动 ----------------
@@ -630,6 +649,9 @@ class Pet(QWidget):
         act_chat = QAction("聊天…", m)
         act_chat.triggered.connect(self.open_chat)
         m.addAction(act_chat)
+        act_history = QAction("聊天记录…", m)
+        act_history.triggered.connect(self.open_history)
+        m.addAction(act_history)
         act_set = QAction("设置…", m)
         act_set.triggered.connect(self.open_settings)
         m.addAction(act_set)
@@ -665,13 +687,28 @@ class Pet(QWidget):
     # ---------------- 子窗口 ----------------
     def open_chat(self):
         if self._chat is None:
-            self._chat = ChatWindow()
+            self._chat = ChatInput()
             self._chat.thinking.connect(self._on_thinking)
             self._chat.replied.connect(self._on_replied)
         self._chat.refresh_status()
+        # 摆在角色上方一点
+        cx = self.x() + self.width() // 2 - self._chat.width() // 2
+        cy = self.y() - 120
+        r = self._screen_rect()
+        cx = max(r.left() + 10, min(cx, r.right() - self._chat.width() - 10))
+        cy = max(r.top() + 10, cy)
+        self._chat.move(cx, cy)
         self._chat.show()
         self._chat.raise_()
         self._chat.activateWindow()
+        self._chat.focus_input()
+
+    def open_history(self):
+        if self._history is None:
+            self._history = ChatHistoryWindow()
+        self._history.show()
+        self._history.raise_()
+        self._history.activateWindow()
 
     def open_settings(self):
         if self._settings_win is None:
