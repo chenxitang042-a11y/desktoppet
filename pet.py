@@ -338,8 +338,11 @@ class Pet(QWidget):
             dpr = screen.devicePixelRatio() or 1.0
             avail = screen.availableGeometry()
 
-            # 目标"屏幕上看起来的高度"(逻辑像素)= 原图高 × 倍率
-            target_h = pm.height() * self._scale
+            # 关键:所有帧统一到"同一个目标高度",与原图尺寸无关。
+            # (素材原始分辨率不统一:多数 ~100px,但 idle/headphones/think
+            #  等是 909px。若按各自原始高度缩放会忽大忽小,所以这里归一化。)
+            BASE_HEIGHT = 150.0
+            target_h = BASE_HEIGHT * self._scale
             # 高度不超过屏幕 40%,宽度不超过屏幕 40%,避免任何屏幕上过大
             max_h = avail.height() * 0.40
             max_w = avail.width() * 0.40

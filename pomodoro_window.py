@@ -9,6 +9,51 @@ from PySide6.QtWidgets import (
 )
 
 
+class MiniTimer(QWidget):
+    """最小化后的横条小时间窗:一直浮在桌面,显示倒计时,点一下还原。"""
+    clicked = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowFlags(
+            Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setFixedSize(150, 46)
+        self._drag = None
+
+        wrap = QHBoxLayout(self)
+        wrap.setContentsMargins(0, 0, 0, 0)
+        self._box = QLabel("25:00")
+        self._box.setAlignment(Qt.AlignCenter)
+        self._box.setStyleSheet(
+            'font-family:"Microsoft YaHei","微软雅黑",sans-serif;'
+            'font-size:20px; font-weight:bold; color:#FFFFFF;'
+            'background:#3E7BD6; border-radius:12px;')
+        wrap.addWidget(self._box)
+
+    def set_text(self, t):
+        self._box.setText(t)
+
+    # 拖动 + 点击还原
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self._drag = e.globalPosition().toPoint() - self.pos()
+            self._moved = False
+
+    def mouseMoveEvent(self, e):
+        if self._drag is not None:
+            p = e.globalPosition().toPoint() - self._drag
+            if (e.globalPosition().toPoint() - (self._drag + self.pos())).manhattanLength() > 4:
+                self._moved = True
+            self.move(p)
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            if not getattr(self, "_moved", False):
+                self.clicked.emit()
+            self._drag = None
+
+
 class PomodoroWindow(QWidget):
     # 阶段切换信号,主程序接过去让角色说话
     focus_started = Signal()
@@ -94,7 +139,7 @@ class PomodoroWindow(QWidget):
         self._display = QLabel("25:00")
         self._display.setAlignment(Qt.AlignCenter)
         self._display.setStyleSheet(
-            f"font-size:68px; font-weight:bold; color:{ACCENT}; letter-spacing:2px;")
+            f"font-size:34px; font-weight:bold; color:{ACCENT}; letter-spacing:1px;")
         root.addWidget(self._display)
 
         # 阶段状态
@@ -123,7 +168,13 @@ class PomodoroWindow(QWidget):
         self._reset_btn.setObjectName("ghost")
         self._reset_btn.clicked.connect(self._on_reset)
         btns.addWidget(self._reset_btn, 1)
+        self._min_btn = QPushButton("最小化")
+        self._min_btn.setObjectName("ghost")
+        self._min_btn.clicked.connect(self._minimize_to_pill)
+        btns.addWidget(self._min_btn, 1)
         root.addLayout(btns)
+
+        self._mini = None   # 最小化后的横条小时间窗
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -207,6 +258,27 @@ class PomodoroWindow(QWidget):
         m, s = divmod(max(0, self._focus_elapsed), 60)
         self._elapsed_label.setText(f"已专注 {m:02d}:{s:02d}")
 
+    def _minimize_to_pill(self):
+        if self._mini is None:
+            self._mini = MiniTimer()
+            self._mini.clicked.connect(self._restore_from_pill)
+        # 摆到主窗口原来的位置附近
+        self._mini.move(self.x(), self.y())
+        self._mini.set_text(self._display.text())
+        self._mini.show()
+        self._mini.raise_()
+        self.hide()
+
+    def _restore_from_pill(self):
+        if self._mini is not None:
+            self._mini.hide()
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
     def _update_display(self):
         m, s = divmod(max(0, self._remaining), 60)
-        self._display.setText(f"{m:02d}:{s:02d}")
+        text = f"{m:02d}:{s:02d}"
+        self._display.setText(text)
+        if self._mini is not None and self._mini.isVisible():
+            self._mini.set_text(text)
