@@ -180,7 +180,7 @@ class SettingsWindow(QWidget):
         self._key.setEchoMode(QLineEdit.Password)
         self._key.setPlaceholderText("在服务商后台申请")
         self._key.editingFinished.connect(self._save_ai)
-        form.addRow("API Key", self._key)
+        form.addRow("密钥(API Key)", self._key)
 
         self._model = QLineEdit(settings.get("ai_model"))
         self._model.setPlaceholderText("留空用默认模型")
@@ -197,7 +197,7 @@ class SettingsWindow(QWidget):
         self._temp.setSingleStep(0.1)
         self._temp.setValue(float(settings.get("ai_temperature")))
         self._temp.valueChanged.connect(self._save_ai)
-        form.addRow("随机度 temperature", self._temp)
+        form.addRow("随机度", self._temp)
 
         self._maxtok = QSpinBox()
         self._maxtok.setRange(64, 4096)

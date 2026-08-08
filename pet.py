@@ -110,6 +110,11 @@ class Pet(QWidget):
         self._move_timer.timeout.connect(self._step_walk)
         self._move_timer.start(30)
 
+        # 看门狗:每秒强制把角色夹回屏幕内(应对拖出、换显示器、改分辨率等一切情况)
+        self._guard_timer = QTimer(self)
+        self._guard_timer.timeout.connect(self._clamp_on_screen)
+        self._guard_timer.start(1000)
+
         self._build_tray()
 
         # 台词预生成(后台,按人设)
@@ -335,11 +340,15 @@ class Pet(QWidget):
 
             # 目标"屏幕上看起来的高度"(逻辑像素)= 原图高 × 倍率
             target_h = pm.height() * self._scale
-            # 永远不超过屏幕高度的 40%,避免满屏大头
+            # 高度不超过屏幕 40%,宽度不超过屏幕 40%,避免任何屏幕上过大
             max_h = avail.height() * 0.40
+            max_w = avail.width() * 0.40
             if target_h > max_h:
                 target_h = max_h
             ratio = target_h / pm.height()
+            if pm.width() * ratio > max_w:
+                ratio = max_w / pm.width()
+                target_h = pm.height() * ratio
             target_w = pm.width() * ratio
 
             # 按物理像素渲染(× dpr)再标记 dpr,高分屏也清晰、且不会被二次放大
@@ -496,7 +505,11 @@ class Pet(QWidget):
                 self.say_scene("pickup", 3000)
                 self._set_state("dragged")
         if self._dragging and self._drag_offset is not None:
-            self.move(gp - self._drag_offset)
+            p = gp - self._drag_offset
+            r = self._screen_rect()
+            x = max(r.left(), min(p.x(), r.right() - self.width()))
+            y = max(r.top(), min(p.y(), r.bottom() - self.height()))
+            self.move(x, y)
             self._reposition_bubble()
 
     def mouseReleaseEvent(self, e):
