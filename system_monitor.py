@@ -27,3 +27,29 @@ def idle_seconds():
         return max(0, millis / 1000.0)
     except Exception:
         return 0
+
+
+def foreground_is_fullscreen():
+    """当前最前窗口是否占满整个屏幕(看视频/演示/游戏)。读不到返回 False。"""
+    if not IS_WINDOWS:
+        return False
+    try:
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return False
+        # 桌面/任务栏不算
+        shell = user32.GetShellWindow()
+        if hwnd == shell:
+            return False
+        rect = wintypes.RECT()
+        if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            return False
+        sw = user32.GetSystemMetrics(0)  # SM_CXSCREEN
+        sh = user32.GetSystemMetrics(1)  # SM_CYSCREEN
+        w = rect.right - rect.left
+        h = rect.bottom - rect.top
+        return w >= sw and h >= sh
+    except Exception:
+        return False

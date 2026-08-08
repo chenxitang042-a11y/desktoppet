@@ -1,19 +1,50 @@
-"""设置窗口。两个标签页:对话(AI 配置) + 角色(人设)。"""
+"""设置窗口。四个标签页:陪伴 / 对话 / 外观 / 其它。
+
+按 Mac 版的分区和顺序排列,统一微软雅黑 + 蓝色主色 + 圆角卡片。
+"""
 import os
+import shutil
 import subprocess
 import sys
 
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QTabWidget,
-    QLabel, QLineEdit, QComboBox, QCheckBox, QPushButton, QTextEdit,
-    QDoubleSpinBox, QSpinBox, QScrollArea, QSlider,
+    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QTabWidget, QLabel,
+    QLineEdit, QComboBox, QPushButton, QTextEdit, QScrollArea, QMessageBox,
 )
 
 from settings import settings
 from ai_client import client, PROVIDERS, find_provider
-from role_profile import role, FIELDS
-from role_lines import role_lines
+from paths import support_dir, images_dir
+from ui_widgets import (
+    ACCENT, FONT, ToggleSwitch, Segmented, Card, Row, SliderRow,
+    section_title, hint_label,
+)
+
+_QSS = f"""
+QWidget {{ background:#F6F8FA; font-family:{FONT}; color:#2B2F36; }}
+QScrollArea {{ border:none; background:#F6F8FA; }}
+QTabWidget::pane {{ border:none; }}
+QTabBar::tab {{
+    font-family:{FONT}; font-size:14px; padding:8px 18px; margin:4px 2px;
+    background:transparent; color:#7A828C; border-radius:8px;
+}}
+QTabBar::tab:selected {{ background:#E9EEF6; color:{ACCENT}; font-weight:bold; }}
+QLineEdit, QComboBox, QTextEdit {{
+    background:#FFFFFF; border:1px solid #D8DEE8; border-radius:8px;
+    padding:7px 9px; font-size:14px;
+}}
+QLineEdit:focus, QComboBox:focus {{ border-color:{ACCENT}; }}
+QPushButton {{
+    font-size:14px; padding:9px 16px; border:none; border-radius:8px;
+    background:{ACCENT}; color:#FFFFFF; font-weight:bold;
+}}
+QPushButton:hover {{ background:#3468BC; }}
+QPushButton#ghost {{ background:#EEF1F5; color:#555; font-weight:normal; }}
+QPushButton#ghost:hover {{ background:#E2E7EE; }}
+QPushButton#danger {{ background:#FDEDED; color:#C0392B; font-weight:normal; }}
+QPushButton#danger:hover {{ background:#F9DCDC; }}
+"""
 
 
 class _TestWorker(QThread):
@@ -24,143 +55,233 @@ class _TestWorker(QThread):
         self.done.emit(ok, msg)
 
 
-class _PreviewWorker(QThread):
-    done = Signal(str)
-
-    def __init__(self, text):
-        super().__init__()
-        self._text = text
-
-    def run(self):
-        import ai_service
-        reply = ai_service.preview(self._text)
-        self.done.emit(reply)
-
-
 class SettingsWindow(QWidget):
-    changed = Signal()          # 设置变动时通知主程序刷新状态
-    scale_changed = Signal(float)   # 角色大小变动时,让主程序实时缩放
+    changed = Signal()
+    scale_changed = Signal(float)
+    opacity_changed = Signal(float)
+    always_on_top_changed = Signal(bool)
+    clothing_changed = Signal(str)
+    taskbar_changed = Signal(bool)
+    open_role_editor = Signal()
 
     def __init__(self):
         super().__init__()
         self.setWindowTitle("设置")
-        self.resize(480, 640)
+        self.resize(560, 720)
+        self.setStyleSheet(_QSS)
         self._test_worker = None
 
         tabs = QTabWidget()
-        tabs.addTab(self._build_ai_tab(), "对话")
-        tabs.addTab(self._build_role_tab(), "角色")
-        tabs.addTab(self._build_appearance_tab(), "外观")
-        tabs.addTab(self._build_problems_tab(), "最近的问题")
+        tabs.addTab(self._scroll(self._companion_tab()), "陪伴")
+        tabs.addTab(self._scroll(self._chat_tab()), "对话")
+        tabs.addTab(self._scroll(self._appearance_tab()), "外观")
+        tabs.addTab(self._scroll(self._other_tab()), "其它")
 
         root = QVBoxLayout(self)
+        root.setContentsMargins(10, 10, 10, 10)
         root.addWidget(tabs)
 
-    # ---------- 最近的问题 ----------
-    def _build_problems_tab(self):
-        from failure_log import failure_log
+    # ---- 工具 ----
+    def _scroll(self, inner):
+        sc = QScrollArea()
+        sc.setWidgetResizable(True)
+        sc.setWidget(inner)
+        return sc
+
+    def _page(self):
         w = QWidget()
         v = QVBoxLayout(w)
-        tip = QLabel("这里记录最近哪些功能没取到数据(比如天气拉取失败、AI 报错)。"
-                     "功能恢复后会自动消失。")
-        tip.setWordWrap(True)
-        tip.setStyleSheet("color:#888; font-size:12px;")
-        v.addWidget(tip)
-        self._problems = QTextEdit()
-        self._problems.setReadOnly(True)
-        v.addWidget(self._problems, 1)
-        refresh = QPushButton("刷新")
-        refresh.clicked.connect(
-            lambda: self._problems.setPlainText(failure_log.summary()))
-        v.addWidget(refresh)
-        self._problems.setPlainText(failure_log.summary())
-        return w
+        v.setContentsMargins(18, 14, 18, 20)
+        v.setSpacing(10)
+        return w, v
 
-    # ---------- 外观标签页 ----------
-    def _build_appearance_tab(self):
-        w = QWidget()
-        v = QVBoxLayout(w)
+    def _toggle(self, key, on_change=None):
+        sw = ToggleSwitch(bool(settings.get(key)))
+        def h(v):
+            settings.set(key, v)
+            if on_change:
+                on_change(v)
+            self.changed.emit()
+        sw.toggled.connect(h)
+        return sw
 
-        lbl = QLabel("角色大小")
-        lbl.setStyleSheet("font-weight:bold;")
-        v.addWidget(lbl)
+    def _slider(self, key, mn, mx, suffix="", scale=1.0, on_change=None):
+        cur = settings.get(key)
+        val = int(round((cur / scale) if scale != 1.0 else cur))
+        sr = SliderRow("", mn, mx, val, suffix)
+        def h(v):
+            settings.set(key, (v * scale) if scale != 1.0 else v)
+            if on_change:
+                on_change(v)
+            self.changed.emit()
+        sr.changed.connect(h)
+        return sr
 
-        self._scale_value = QLabel()
-        v.addWidget(self._scale_value)
+    @staticmethod
+    def _open_path(path):
+        try:
+            os.makedirs(path, exist_ok=True)
+            if sys.platform.startswith("win"):
+                os.startfile(path)  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.run(["open", path])
+            else:
+                subprocess.run(["xdg-open", path])
+        except Exception:
+            pass
 
-        self._scale_slider = QSlider(Qt.Horizontal)
-        self._scale_slider.setMinimum(30)    # 0.30 倍
-        self._scale_slider.setMaximum(250)   # 2.50 倍
-        cur = int(round(float(settings.get("pet_scale")) * 100))
-        self._scale_slider.setValue(max(30, min(250, cur)))
-        self._scale_slider.valueChanged.connect(self._on_scale)
-        v.addWidget(self._scale_slider)
+    # ======== 陪伴 ========
+    def _companion_tab(self):
+        w, v = self._page()
 
-        hint = QLabel("拖动滑块实时调整。太大就往左拖。")
-        hint.setStyleSheet("color:#999; font-size:11px;")
-        v.addWidget(hint)
+        # 番茄钟
+        v.addWidget(section_title("番茄钟"))
+        c = Card()
+        c.add_row(Row("启用番茄钟", self._toggle("pomodoro_enabled")))
+        c.add_divider()
+        c.add_row(self._slider("pomodoro_focus", 1, 120, " 分"))
+        r = c._v.itemAt(c._v.count() - 1).widget()
+        c.add_divider()
+        c.add_row(self._slider("pomodoro_break", 1, 60, " 分"))
+        v.addWidget(c)
+        # 给番茄钟两条滑块补上标题
+        self._relabel_last_sliders(c, ["时长", "休息"])
 
-        v.addSpacing(16)
-        behave = QLabel("行为")
-        behave.setStyleSheet("font-weight:bold;")
-        v.addWidget(behave)
+        # 护眼
+        v.addWidget(section_title("护眼"))
+        c = Card()
+        c.add_row(Row("护眼提醒(20-20-20)", self._toggle("eye_rest_enabled")))
+        c.add_divider()
+        c.add_row(self._slider("eye_rest_interval", 5, 60, " 分"))
+        self._relabel_last_sliders(c, ["间隔"])
+        v.addWidget(c)
+        v.addWidget(hint_label("到点它会提醒你抬头远眺,陪你一起歇眼睛。"))
 
-        self._watch_activity = QCheckBox("根据你在用什么软件切换姿势/台词(听歌、打字、看网页)")
-        self._watch_activity.setChecked(bool(settings.get("watch_activity")))
-        self._watch_activity.stateChanged.connect(
-            lambda: settings.set("watch_activity", self._watch_activity.isChecked()))
-        v.addWidget(self._watch_activity)
+        # 提醒
+        v.addWidget(section_title("提醒"))
+        c = Card()
+        c.add_row(Row("夜晚模式(深夜提醒休息)", self._toggle("night_mode")))
+        c.add_divider()
+        c.add_row(Row("久坐 / 工作陪伴提醒", self._toggle("sedentary_reminder")))
+        c.add_divider()
+        c.add_row(Row("低电量提醒", self._toggle("watch_battery")))
+        c.add_divider()
+        c.add_row(Row("稀有彩蛋(偶尔说点意外的话)", self._toggle("rare_enabled")))
+        v.addWidget(c)
+        v.addWidget(hint_label("稀有彩蛋每天最多出现几次,不会频繁打扰。"))
 
-        self._watch_battery = QCheckBox("电脑快没电时提醒")
-        self._watch_battery.setChecked(bool(settings.get("watch_battery")))
-        self._watch_battery.stateChanged.connect(
-            lambda: settings.set("watch_battery", self._watch_battery.isChecked()))
-        v.addWidget(self._watch_battery)
+        # 天气与节日
+        v.addWidget(section_title("天气与节日"))
+        c = Card()
+        c.add_row(Row("天气联动(需要联网)", self._toggle("weather_enabled")))
+        v.addWidget(c)
+        v.addWidget(hint_label("下雨、下雪会有不同姿势和台词。用免费天气服务按网络位置判断,不需要定位权限。"))
+        c = Card()
+        c.add_row(Row("节日彩蛋", self._toggle("festival_enabled")))
+        c.add_divider()
+        bd = QLineEdit(settings.get("birthday"))
+        bd.setPlaceholderText("例如 08-27")
+        bd.setFixedWidth(110)
+        bd.editingFinished.connect(
+            lambda: settings.set("birthday", bd.text().strip()))
+        c.add_row(Row("生日(MM-DD)", bd))
+        v.addWidget(c)
 
-        self._weather = QCheckBox("获取天气,下雨下雪会有反应")
-        self._weather.setChecked(bool(settings.get("weather_enabled")))
-        self._weather.stateChanged.connect(
-            lambda: settings.set("weather_enabled", self._weather.isChecked()))
-        v.addWidget(self._weather)
+        # 移动
+        v.addWidget(section_title("移动"))
+        c = Card()
+        c.add_row(Row("自动散步", self._toggle("auto_stroll")))
+        c.add_divider()
+        c.add_row(Row("走到屏幕边缘休息", self._toggle("edge_rest")))
+        c.add_divider()
+        c.add_row(self._slider("move_speed", 10, 100))
+        self._relabel_last_sliders(c, ["移动速度"])
+        v.addWidget(c)
 
-        bd_row = QHBoxLayout()
-        bd_row.addWidget(QLabel("你的生日(MM-DD,到日子它会说生日快乐)"))
-        self._birthday = QLineEdit(settings.get("birthday"))
-        self._birthday.setPlaceholderText("例如 08-15")
-        self._birthday.setFixedWidth(90)
-        self._birthday.editingFinished.connect(
-            lambda: settings.set("birthday", self._birthday.text().strip()))
-        bd_row.addWidget(self._birthday)
-        v.addLayout(bd_row)
+        # 系统感知
+        v.addWidget(section_title("系统感知"))
+        c = Card()
+        c.add_row(Row("锁屏 / 合盖时它也去睡", self._toggle("lock_sleep")))
+        c.add_divider()
+        c.add_row(Row("有程序全屏时自动隐藏", self._toggle("fullscreen_hide")))
+        v.addWidget(c)
+        v.addWidget(hint_label("看视频、演示、玩游戏时它会自己让开,退出全屏再回来。"))
 
-        privacy = QLabel("这两项只在你本机读取,不上传任何信息。")
-        privacy.setWordWrap(True)
-        privacy.setStyleSheet("color:#999; font-size:11px;")
-        v.addWidget(privacy)
+        # 鼠标互动
+        v.addWidget(section_title("鼠标互动"))
+        c = Card()
+        c.add_row(Row("鼠标靠近时抬头 / 停留时走过去", self._toggle("mouse_interact")))
+        v.addWidget(c)
+
+        # 发呆
+        v.addWidget(section_title("发呆"))
+        c = Card()
+        c.add_row(Row("长时间无操作后坐下", self._toggle("idle_sit")))
+        c.add_divider()
+        c.add_row(self._slider("idle_wait_min", 1, 30, " 分"))
+        self._relabel_last_sliders(c, ["等待时间"])
+        v.addWidget(c)
+
+        # 主动搭话
+        v.addWidget(section_title("主动搭话"))
+        c = Card()
+        seg = Segmented(
+            [("none", "不主动说"), ("few", "很少"), ("normal", "正常"), ("more", "较多")],
+            settings.get("chatter_freq"))
+        seg.changed.connect(lambda k: (settings.set("chatter_freq", k), self.changed.emit()))
+        c.add_row(Row("说话频率", seg))
+        v.addWidget(c)
+        v.addWidget(hint_label("除了点击回应之外,它偶尔会自己说一句。同一轮里不会重复同一句话。"))
+
+        # 安静时段
+        v.addWidget(section_title("安静时段"))
+        c = Card()
+        c.add_row(Row("在指定时段内不主动说话", self._toggle("quiet_enabled")))
+        c.add_divider()
+        c.add_row(self._slider("quiet_start", 0, 23, " 点"))
+        self._relabel_last_sliders(c, ["从"])
+        c.add_divider()
+        c.add_row(self._slider("quiet_end", 0, 23, " 点"))
+        self._relabel_last_sliders(c, ["到"])
+        v.addWidget(c)
+
+        # 感知与心情
+        v.addWidget(section_title("感知与心情"))
+        c = Card()
+        c.add_row(Row("感知你在用什么软件并做出反应", self._toggle("watch_activity")))
+        v.addWidget(c)
+        v.addWidget(hint_label("写代码、听音乐、看文档时反应不同。只读取软件名称,不读取任何窗口内容。"))
+        c = Card()
+        c.add_row(Row("心情系统", self._toggle("mood_enabled")))
+        c.add_divider()
+        c.add_row(Row("启动时按时段问候", self._toggle("greet_on_start")))
+        v.addWidget(c)
+        v.addWidget(hint_label("心情会随时间、天气、你的互动频率变化,影响它多话还是安静、爱不爱走动。"))
 
         v.addStretch(1)
-        self._update_scale_label()
         return w
 
-    def _on_scale(self, val):
-        scale = val / 100.0
-        settings.set("pet_scale", scale)
-        self._update_scale_label()
-        self.scale_changed.emit(scale)
+    def _relabel_last_sliders(self, card, titles):
+        """给刚加进卡片的 SliderRow 补标题(SliderRow 的标题在第0个 widget)。"""
+        rows = [card._v.itemAt(i).widget() for i in range(card._v.count())]
+        sliders = [r for r in rows if isinstance(r, SliderRow)]
+        for sr, t in zip(sliders[-len(titles):], titles):
+            lbl = sr.layout().itemAt(0).widget()
+            if isinstance(lbl, QLabel):
+                lbl.setText(t)
 
-    def _update_scale_label(self):
-        s = float(settings.get("pet_scale"))
-        self._scale_value.setText(f"当前:{s:.2f} 倍")
+    # ======== 对话 ========
+    def _chat_tab(self):
+        w, v = self._page()
 
-    # ---------- 对话标签页 ----------
-    def _build_ai_tab(self):
-        w = QWidget()
-        form = QFormLayout(w)
+        c = Card()
+        form = QFormLayout()
+        form.setContentsMargins(0, 8, 0, 8)
+        form.setSpacing(10)
 
-        self._enabled = QCheckBox("启用 AI 对话")
-        self._enabled.setChecked(bool(settings.get("ai_enabled")))
-        self._enabled.stateChanged.connect(self._save_ai)
-        form.addRow(self._enabled)
+        self._enabled = ToggleSwitch(bool(settings.get("ai_enabled")))
+        self._enabled.toggled.connect(lambda b: (settings.set("ai_enabled", b), self.changed.emit()))
+        form.addRow("启用 AI 对话", self._enabled)
 
         self._provider = QComboBox()
         for p in PROVIDERS:
@@ -171,9 +292,7 @@ class SettingsWindow(QWidget):
         self._provider.currentIndexChanged.connect(self._on_provider)
         form.addRow("服务商", self._provider)
 
-        self._note = QLabel()
-        self._note.setWordWrap(True)
-        self._note.setStyleSheet("color:#888; font-size:12px;")
+        self._note = hint_label("")
         form.addRow("", self._note)
 
         self._key = QLineEdit(settings.get("ai_key"))
@@ -191,38 +310,7 @@ class SettingsWindow(QWidget):
         self._host.setPlaceholderText("留空用默认地址")
         self._host.editingFinished.connect(self._save_ai)
         form.addRow("接口地址(可选)", self._host)
-
-        self._temp = QDoubleSpinBox()
-        self._temp.setRange(0.0, 2.0)
-        self._temp.setSingleStep(0.1)
-        self._temp.setValue(float(settings.get("ai_temperature")))
-        self._temp.valueChanged.connect(self._save_ai)
-        form.addRow("随机度", self._temp)
-
-        self._maxtok = QSpinBox()
-        self._maxtok.setRange(64, 4096)
-        self._maxtok.setValue(int(settings.get("ai_max_tokens")))
-        self._maxtok.valueChanged.connect(self._save_ai)
-        form.addRow("单次最长回复", self._maxtok)
-
-        self._framing = QCheckBox("附加收尾提示(让它别跳戏、别写旁白)")
-        self._framing.setChecked(bool(settings.get("ai_add_framing_note")))
-        self._framing.stateChanged.connect(self._save_ai)
-        form.addRow(self._framing)
-
-        self._scene_lines = QCheckBox("点击/问候等台词由 AI 按人设生成")
-        self._scene_lines.setChecked(bool(settings.get("ai_scene_lines")))
-        self._scene_lines.stateChanged.connect(self._save_ai)
-        form.addRow(self._scene_lines)
-
-        regen_row = QHBoxLayout()
-        self._regen_btn = QPushButton("重新生成台词")
-        self._regen_btn.clicked.connect(self._on_regen)
-        regen_row.addWidget(self._regen_btn)
-        self._regen_status = QLabel(role_lines.status_text())
-        self._regen_status.setStyleSheet("color:#888; font-size:12px;")
-        regen_row.addWidget(self._regen_status, 1)
-        form.addRow(regen_row)
+        c._v.addLayout(form)
 
         test_row = QHBoxLayout()
         self._test_btn = QPushButton("测试连接")
@@ -230,15 +318,58 @@ class SettingsWindow(QWidget):
         test_row.addWidget(self._test_btn)
         self._test_result = QLabel("")
         self._test_result.setWordWrap(True)
+        self._test_result.setStyleSheet("background:transparent;font-size:13px;")
         test_row.addWidget(self._test_result, 1)
-        form.addRow(test_row)
+        c._v.addLayout(test_row)
+        v.addWidget(c)
 
-        self._on_provider()  # 初始化提示文字
+        # 它是谁
+        v.addWidget(section_title("它是谁"))
+        c = Card()
+        r = QHBoxLayout()
+        left = QVBoxLayout()
+        t = QLabel("角色设定")
+        t.setStyleSheet("font-size:15px;font-weight:bold;background:transparent;")
+        left.addWidget(t)
+        left.addWidget(hint_label("完全由你决定 —— 程序不写任何人设"))
+        r.addLayout(left, 1)
+        openbtn = QPushButton("打开角色设定")
+        openbtn.clicked.connect(self.open_role_editor.emit)
+        r.addWidget(openbtn, 0, Qt.AlignVCenter)
+        c._v.addLayout(r)
+        v.addWidget(c)
+
+        # 高级
+        v.addWidget(section_title("高级"))
+        c = Card()
+        c.add_row(self._slider("ai_memory_turns", 2, 40, " 轮"))
+        self._relabel_last_sliders(c, ["记住最近"])
+        c.add_divider()
+        c.add_row(self._slider("ai_max_tokens", 100, 2000))
+        self._relabel_last_sliders(c, ["回复长度上限"])
+        c.add_divider()
+        self._scene_lines = ToggleSwitch(bool(settings.get("ai_scene_lines")))
+        self._scene_lines.toggled.connect(
+            lambda b: (settings.set("ai_scene_lines", b), self.changed.emit()))
+        c.add_row(Row("点击/问候台词由 AI 按人设生成", self._scene_lines))
+        c.add_divider()
+        clr = QPushButton("清空聊天记录"); clr.setObjectName("ghost")
+        clr.clicked.connect(self._clear_chat)
+        c._v.addWidget(clr)
+        c._v.addSpacing(6)
+        v.addWidget(c)
+
+        v.addWidget(section_title("说句实话"))
+        v.addWidget(hint_label(
+            "小模型演不住人物,免费的那些聊几轮就会滑回助手腔,这不是提示词能补救的。\n"
+            "在意角色感的话:国内用 deepseek-chat 或 glm-4-plus,国外用 Claude。"))
+
+        self._on_provider()
+        v.addStretch(1)
         return w
 
     def _on_provider(self):
-        pid = self._provider.currentData()
-        p = find_provider(pid)
+        p = find_provider(self._provider.currentData())
         self._note.setText(f"{p.note}\n后台:{p.console}" if p.console else p.note)
         self._save_ai()
 
@@ -248,15 +379,7 @@ class SettingsWindow(QWidget):
         settings.set("ai_key", self._key.text().strip())
         settings.set("ai_model", self._model.text().strip())
         settings.set("ai_host", self._host.text().strip())
-        settings.set("ai_temperature", self._temp.value())
-        settings.set("ai_max_tokens", self._maxtok.value())
-        settings.set("ai_add_framing_note", self._framing.isChecked())
-        settings.set("ai_scene_lines", self._scene_lines.isChecked())
         self.changed.emit()
-
-    def _on_regen(self):
-        role_lines.regenerate()
-        self._regen_status.setText("已触发,正在后台按你的设定生成…")
 
     def _on_test(self):
         if self._test_worker is not None:
@@ -270,170 +393,158 @@ class SettingsWindow(QWidget):
 
     def _on_test_done(self, ok, msg):
         self._test_result.setStyleSheet(
-            "color:#3a3;" if ok else "color:#c33;")
+            f"background:transparent;font-size:13px;color:{'#3a8f4f' if ok else '#C0392B'};")
         self._test_result.setText(msg)
         self._test_btn.setEnabled(True)
         self._test_worker = None
 
-    # ---------- 角色标签页 ----------
-    def _build_role_tab(self):
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        inner = QWidget()
-        v = QVBoxLayout(inner)
+    def _clear_chat(self):
+        from conversation import conversation
+        conversation.clear()
+        self._test_result.setText("聊天记录已清空")
 
-        tip = QLabel("这些内容会**原样**发给模型,程序不额外加任何性格。填得越具体越像。")
-        tip.setWordWrap(True)
-        tip.setStyleSheet("color:#888; font-size:12px;")
-        v.addWidget(tip)
+    # ======== 外观 ========
+    def _appearance_tab(self):
+        w, v = self._page()
 
-        self._role_edits = {}
-        for f in FIELDS:
-            lbl = QLabel(f.title)
-            lbl.setStyleSheet("font-weight:bold;")
-            v.addWidget(lbl)
-            hint = QLabel(f.hint)
-            hint.setWordWrap(True)
-            hint.setStyleSheet("color:#999; font-size:11px;")
-            v.addWidget(hint)
-            if f.multiline:
-                e = QTextEdit(role.get(f.key))
-                e.setFixedHeight(70)
-            else:
-                e = QLineEdit(role.get(f.key))
-            self._role_edits[f.key] = e
-            v.addWidget(e)
+        v.addWidget(section_title("服装"))
+        c = Card()
+        seg = Segmented(
+            [("hoodie", "卫衣"), ("polo", "Polo"), ("jacket", "外套")],
+            settings.get("clothing"))
+        seg.changed.connect(self._on_clothing)
+        c.add_row(Row("当前服装", seg))
+        v.addWidget(c)
+        v.addWidget(hint_label("注:目前 Polo 和外套只有站立单图,走路/看书等动作仍用默认卫衣。"))
 
-        # 和你说话的人
-        lbl = QLabel("和你说话的人")
-        lbl.setStyleSheet("font-weight:bold;")
-        v.addWidget(lbl)
-        self._user_desc = QLineEdit(role.user_description)
-        self._user_desc.setPlaceholderText("你是谁、它该怎么称呼你")
-        v.addWidget(self._user_desc)
-
-        save_btn = QPushButton("保存角色设定")
-        save_btn.clicked.connect(self._save_role)
-        v.addWidget(save_btn)
-
-        self._role_saved = QLabel("")
-        self._role_saved.setStyleSheet("color:#3a3; font-size:12px;")
-        v.addWidget(self._role_saved)
-
-        # 大段编辑:导出 txt / 读回
-        v.addSpacing(8)
-        edit_lbl = QLabel("嫌输入框小?可以导出成文本文件大段编辑,改完读回:")
-        edit_lbl.setWordWrap(True)
-        edit_lbl.setStyleSheet("color:#888; font-size:12px;")
-        v.addWidget(edit_lbl)
-        er = QHBoxLayout()
-        exp_btn = QPushButton("导出为文本编辑")
-        exp_btn.clicked.connect(self._export_role_text)
-        er.addWidget(exp_btn)
-        imp_btn = QPushButton("从文件读回")
-        imp_btn.clicked.connect(self._import_role_text)
-        er.addWidget(imp_btn)
-        v.addLayout(er)
-
-        # 试一下台词
-        v.addSpacing(12)
-        pv_lbl = QLabel("试一下它会怎么回(不进聊天记录,方便反复调设定):")
-        pv_lbl.setWordWrap(True)
-        pv_lbl.setStyleSheet("font-weight:bold;")
-        v.addWidget(pv_lbl)
-        self._preview_input = QLineEdit()
-        self._preview_input.setPlaceholderText("输入一句话试试,回车")
-        self._preview_input.returnPressed.connect(self._on_preview)
-        v.addWidget(self._preview_input)
-        self._preview_out = QLabel("")
-        self._preview_out.setWordWrap(True)
-        self._preview_out.setStyleSheet("color:#555; background:#f4f4f4; padding:8px; border-radius:6px;")
-        v.addWidget(self._preview_out)
-
-        # 编辑场景台词
-        v.addSpacing(12)
-        sl_lbl = QLabel("场景台词(点击/问候等)导出编辑、读回:")
-        sl_lbl.setWordWrap(True)
-        sl_lbl.setStyleSheet("color:#888; font-size:12px;")
-        v.addWidget(sl_lbl)
-        sr = QHBoxLayout()
-        sl_exp = QPushButton("导出台词编辑")
-        sl_exp.clicked.connect(self._export_lines)
-        sr.addWidget(sl_exp)
-        sl_imp = QPushButton("读回台词")
-        sl_imp.clicked.connect(self._import_lines)
-        sr.addWidget(sl_imp)
-        v.addLayout(sr)
-        self._lines_status = QLabel("")
-        self._lines_status.setStyleSheet("color:#888; font-size:12px;")
-        v.addWidget(self._lines_status)
+        v.addWidget(section_title("显示"))
+        c = Card()
+        sr = self._slider("pet_scale", 30, 250, "%", scale=0.01,
+                          on_change=lambda v: self.scale_changed.emit(v / 100.0))
+        c.add_row(sr)
+        self._relabel_last_sliders(c, ["大小"])
+        c.add_divider()
+        sr2 = self._slider("opacity", 30, 100, "%", scale=0.01,
+                           on_change=lambda v: self.opacity_changed.emit(v / 100.0))
+        c.add_row(sr2)
+        self._relabel_last_sliders(c, ["透明度"])
+        v.addWidget(c)
 
         v.addStretch(1)
-        scroll.setWidget(inner)
-        return scroll
+        return w
 
-    def _save_role(self):
-        for key, edit in self._role_edits.items():
-            if isinstance(edit, QTextEdit):
-                role.set(key, edit.toPlainText())
-            else:
-                role.set(key, edit.text())
-        role.user_description = self._user_desc.text()
-        role_lines.regenerate()   # 人设变了,台词按新设定重生成
-        self._role_saved.setText("已保存(台词将按新设定重新生成)")
+    def _on_clothing(self, key):
+        settings.set("clothing", key)
+        self.clothing_changed.emit(key)
         self.changed.emit()
 
-    @staticmethod
-    def _open_file(path):
+    # ======== 其它 ========
+    def _other_tab(self):
+        w, v = self._page()
+
+        c = Card()
+        c.add_row(Row("始终置顶", self._toggle(
+            "always_on_top", on_change=lambda b: self.always_on_top_changed.emit(b))))
+        c.add_divider()
+        c.add_row(Row("开机自动启动", self._toggle("autostart", on_change=self._apply_autostart)))
+        c.add_divider()
+        c.add_row(Row("点击时说话", self._toggle("click_to_talk")))
+        c.add_divider()
+        c.add_row(Row("在任务栏显示图标", self._toggle(
+            "show_in_taskbar", on_change=lambda b: self.taskbar_changed.emit(b))))
+        v.addWidget(c)
+
+        v.addWidget(section_title("素材与台词"))
+        c = Card()
+        b1 = QPushButton("还原成内置台词"); b1.setObjectName("ghost")
+        b1.clicked.connect(self._reset_lines)
+        c._v.addWidget(b1); c._v.addSpacing(6)
+        c.add_divider()
+        b2 = QPushButton("打开数据文件夹"); b2.setObjectName("ghost")
+        b2.clicked.connect(lambda: self._open_path(support_dir()))
+        c._v.addWidget(b2); c._v.addSpacing(6)
+        b3 = QPushButton("打开角色图片文件夹"); b3.setObjectName("ghost")
+        b3.clicked.connect(self._open_custom_images)
+        c._v.addWidget(b3); c._v.addSpacing(6)
+        v.addWidget(c)
+        v.addWidget(hint_label(
+            "把同名 png 放进「角色图片文件夹」就能替换对应动作的图,重启桌宠生效。"))
+
+        # 名字
+        v.addWidget(section_title("名字"))
+        c = Card()
+        from role_profile import role
+        self._name_it = QLineEdit(role.get("name"))
+        self._name_it.editingFinished.connect(
+            lambda: role.set("name", self._name_it.text()))
+        c.add_row(Row("它叫什么", self._name_it))
+        c.add_divider()
+        self._name_you = QLineEdit(settings.get("user_name"))
+        self._name_you.editingFinished.connect(
+            lambda: settings.set("user_name", self._name_you.text()))
+        c.add_row(Row("你叫什么", self._name_you))
+        c.add_divider()
+        self._call_you = QLineEdit(role.user_description)
+        self._call_you.setPlaceholderText("留空就用上面那个")
+        self._call_you.editingFinished.connect(
+            lambda: setattr(role, "user_description", self._call_you.text()))
+        c.add_row(Row("它怎么称呼你", self._call_you))
+        v.addWidget(c)
+
+        # 最近的问题
+        v.addWidget(section_title("最近的问题"))
+        c = Card()
+        c.add_row(Row("拿不到数据时含糊提一句", self._toggle("failure_hint")))
+        v.addWidget(c)
+        from failure_log import failure_log
+        self._problems = QTextEdit()
+        self._problems.setReadOnly(True)
+        self._problems.setFixedHeight(110)
+        self._problems.setPlainText(failure_log.summary())
+        v.addWidget(self._problems)
+        rf = QPushButton("刷新"); rf.setObjectName("ghost")
+        rf.clicked.connect(lambda: self._problems.setPlainText(failure_log.summary()))
+        v.addWidget(rf)
+
+        # 清除个人信息
+        v.addWidget(section_title("清除个人信息"))
+        v.addWidget(hint_label(
+            "会抹掉:名字、生日、提醒、陪伴记录、角色设定、聊天记录这些。不会删你换过的图片。"))
+        wipe = QPushButton("清除个人信息"); wipe.setObjectName("danger")
+        wipe.clicked.connect(self._wipe)
+        v.addWidget(wipe)
+
+        v.addStretch(1)
+        return w
+
+    def _apply_autostart(self, on):
         try:
-            if sys.platform.startswith("win"):
-                os.startfile(path)   # type: ignore[attr-defined]
-            elif sys.platform == "darwin":
-                subprocess.run(["open", path])
-            else:
-                subprocess.run(["xdg-open", path])
+            import autostart
+            autostart.set_enabled(bool(on))
         except Exception:
             pass
 
-    def _export_role_text(self):
-        p = role.export_text()
-        if p:
-            self._open_file(p)
-            self._role_saved.setText("已导出并打开,改完保存,再点「从文件读回」")
+    def _reset_lines(self):
+        from role_lines import role_lines
+        role_lines.regenerate()
 
-    def _import_role_text(self):
-        if role.import_text():
-            # 刷新界面上的输入框
-            for key, edit in self._role_edits.items():
-                if isinstance(edit, QTextEdit):
-                    edit.setPlainText(role.get(key))
-                else:
-                    edit.setText(role.get(key))
-            self._user_desc.setText(role.user_description)
-            role_lines.regenerate()
-            self._role_saved.setText("已读回(台词将按新设定重新生成)")
-        else:
-            self._role_saved.setText("没读到内容,先点「导出为文本编辑」")
+    def _open_custom_images(self):
+        d = os.path.join(support_dir(), "PetImages")
+        self._open_path(d)
 
-    def _on_preview(self):
-        text = self._preview_input.text().strip()
-        if not text:
+    def _wipe(self):
+        box = QMessageBox(self)
+        box.setWindowTitle("确认")
+        box.setText("确定清除个人信息吗?此操作不可撤销。")
+        box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        if box.exec() != QMessageBox.Yes:
             return
-        self._preview_out.setText("……")
-        self._preview_worker = _PreviewWorker(text)
-        self._preview_worker.done.connect(self._preview_out.setText)
-        self._preview_worker.start()
-
-    def _export_lines(self):
-        p = role_lines.export_for_editing()
-        if p:
-            self._open_file(p)
-            self._lines_status.setText("已导出并打开,改完保存,再点「读回台词」")
-        else:
-            self._lines_status.setText("还没有生成的台词。先在「对话」页点「重新生成台词」")
-
-    def _import_lines(self):
-        if role_lines.import_from_editing():
-            self._lines_status.setText("已读回你改的台词")
-        else:
-            self._lines_status.setText("没读到内容,先点「导出台词编辑」")
+        for name in ["role.json", "chat.json", "companion.json", "reminders.json",
+                     "role_lines.json", "events.json", "角色设定.txt", "角色台词.txt"]:
+            try:
+                os.remove(os.path.join(support_dir(), name))
+            except Exception:
+                pass
+        for key in ["birthday", "user_name"]:
+            settings.set(key, "")
+        self._problems.setPlainText("已清除。部分改动重启后完全生效。")

@@ -175,6 +175,18 @@ class Pet(QWidget):
         self._failure_timer.timeout.connect(self._maybe_failure_hint)
         self._failure_timer.start(600000)
 
+        # 有程序全屏时自动隐藏(每 3 秒看一次)
+        self._fs_hidden = False
+        self._fullscreen_timer = QTimer(self)
+        self._fullscreen_timer.timeout.connect(self._check_fullscreen)
+        self._fullscreen_timer.start(3000)
+
+        # 护眼 20-20-20 / 久坐提醒(每分钟看一次)
+        self._rest_tick = 0
+        self._rest_timer = QTimer(self)
+        self._rest_timer.timeout.connect(self._check_rest)
+        self._rest_timer.start(60000)
+
     # ---------------- 台词 ----------------
     def say_scene(self, scene, duration_ms=5000):
         text = role_lines.line(scene)
@@ -184,6 +196,8 @@ class Pet(QWidget):
         self._bubble.show_text(text, cx, self.y(), duration_ms)
 
     def _startup_greeting(self):
+        if not settings.get("greet_on_start"):
+            return
         import datetime
         h = datetime.datetime.now().hour
         # 节日 > 认识纪念日 > 按时段问候
@@ -207,26 +221,47 @@ class Pet(QWidget):
             scene = "greet_night"
         self.say_scene(scene)
 
+    def _in_quiet_hours(self):
+        if not settings.get("quiet_enabled"):
+            return False
+        import datetime
+        h = datetime.datetime.now().hour
+        s = int(settings.get("quiet_start")); e = int(settings.get("quiet_end"))
+        if s == e:
+            return False
+        if s < e:
+            return s <= h < e
+        return h >= s or h < e   # 跨午夜
+
     def _maybe_chatter(self):
         if self._dragging or self._walking or self._bubble.isVisible() or self._sleeping:
             return
-        # 先看有没有节日
-        fest = festival_events.festival_greeting_today()
-        if fest:
-            cx = self.x() + self.width() // 2
-            self._bubble.show_text(fest, cx, self.y(), 6000)
+        if self._in_quiet_hours():
             return
-        # 稀有事件(极低概率)
-        rare = festival_events.rare_event_line()
-        if rare:
-            line = role_lines.line("rare") or rare
-            cx = self.x() + self.width() // 2
-            self._bubble.show_text(line, cx, self.y(), 6000)
+        # 节日
+        if settings.get("festival_enabled"):
+            fest = festival_events.festival_greeting_today()
+            if fest:
+                cx = self.x() + self.width() // 2
+                self._bubble.show_text(fest, cx, self.y(), 6000)
+                return
+        # 稀有事件
+        if settings.get("rare_enabled"):
+            rare = festival_events.rare_event_line()
+            if rare:
+                line = role_lines.line("rare") or rare
+                cx = self.x() + self.width() // 2
+                self._bubble.show_text(line, cx, self.y(), 6000)
+                return
+        # 说话频率
+        freq = settings.get("chatter_freq")
+        freq_mult = {"none": 0.0, "few": 0.4, "normal": 1.0, "more": 2.0}.get(freq, 1.0)
+        if freq_mult <= 0:
             return
         import datetime
         h = datetime.datetime.now().hour
-        # 心情影响开口概率:话多的心情倍率小 -> 概率高
-        base = 0.25 / max(0.3, mood.chatter_multiplier)
+        mood_mult = mood.chatter_multiplier if settings.get("mood_enabled") else 1.0
+        base = 0.25 / max(0.3, mood_mult) * freq_mult
         if random.random() < base:
             scene = "night" if (h >= 23 or h < 5) else "chatter"
             self.say_scene(scene)
@@ -291,8 +326,10 @@ class Pet(QWidget):
         mood.reevaluate(is_pomo, self._activity, weather.current)
 
     def _check_idle(self):
+        if not settings.get("idle_sit"):
+            return
         secs = system_monitor.idle_seconds()
-        threshold = int(settings.get("idle_sleep_seconds"))
+        threshold = int(settings.get("idle_wait_min")) * 60
         if secs >= threshold and not self._sleeping and not self._dragging:
             self._sleeping = True
             self._set_state("sleep")
@@ -302,6 +339,8 @@ class Pet(QWidget):
             self._set_state("idle")
 
     def _check_lock(self):
+        if not settings.get("lock_sleep"):
+            return
         just_locked, just_unlocked = self._lock.poll()
         if just_locked:
             self._sleeping = True
@@ -320,12 +359,46 @@ class Pet(QWidget):
         self._blink_timer.setInterval(random.randint(4000, 9000))
 
     def _maybe_failure_hint(self):
-        if self._busy() or self._sleeping:
+        if self._busy() or self._sleeping or not settings.get("failure_hint"):
             return
         if failure_log.should_hint():
             line = role_lines.line("rare") or "好像忘了什么"
             cx = self.x() + self.width() // 2
             self._bubble.show_text(line, cx, self.y(), 5000)
+
+    def _check_fullscreen(self):
+        if not settings.get("fullscreen_hide"):
+            if self._fs_hidden:
+                self._fs_hidden = False
+                self.show()
+            return
+        fs = system_monitor.foreground_is_fullscreen()
+        if fs and not self._fs_hidden:
+            self._fs_hidden = True
+            self.hide()
+        elif not fs and self._fs_hidden:
+            self._fs_hidden = False
+            self.show()
+
+    def _check_rest(self):
+        if self._busy() or self._sleeping or self._in_quiet_hours():
+            return
+        self._rest_tick += 1
+        import datetime
+        h = datetime.datetime.now().hour
+        # 护眼 20-20-20:每 interval 分钟提醒远眺
+        if settings.get("eye_rest_enabled"):
+            iv = max(5, int(settings.get("eye_rest_interval")))
+            if self._rest_tick % iv == 0:
+                self.say_scene("break_start", 6000)
+                return
+        # 久坐提醒:每 60 分钟
+        if settings.get("sedentary_reminder") and self._rest_tick % 60 == 0:
+            self.say_scene("overwork", 6000)
+            return
+        # 夜晚模式:深夜提醒休息
+        if settings.get("night_mode") and h >= 23 and self._rest_tick % 30 == 0:
+            self.say_scene("night", 6000)
 
     # ---------------- 素材 ----------------
     def _load_pixmap(self, path):
@@ -432,6 +505,7 @@ class Pet(QWidget):
         # 窗口真正显示后再定位,这时屏幕和尺寸才准
         if not self._placed:
             self._placed = True
+            self.setWindowOpacity(float(settings.get("opacity")))
             self._apply_frame()          # 用真实屏幕重新渲染一次(dpr 才对)
             self._place_bottom_right()
             # 再保险:下一轮事件循环里夹一次
@@ -450,8 +524,10 @@ class Pet(QWidget):
         if self._state not in ("idle", "blink"):
             if not animation.loops(self._state):
                 return
-        # 走动概率跟随心情
-        stroll = mood.stroll_tendency
+        # 走动概率跟随心情(可关);未开心情则用固定倾向
+        stroll = mood.stroll_tendency if settings.get("mood_enabled") else 0.4
+        if not settings.get("auto_stroll"):
+            stroll = 0.0
         roll = random.random()
         if roll < stroll * 0.5:
             self._start_walk()
@@ -462,6 +538,8 @@ class Pet(QWidget):
 
     # ---------------- 走动 ----------------
     def _start_walk(self):
+        # 移动速度:滑块 10~100 映射到每步 1~5 像素
+        self._walk_speed = max(1, int(settings.get("move_speed") / 20))
         r = self._screen_rect()
         margin = 40
         target = random.randint(r.left() + margin, r.right() - self.width() - margin)
@@ -529,6 +607,9 @@ class Pet(QWidget):
             self._set_state("idle")
         else:
             # 没移动 = 点了一下,按连点次数说不同的话
+            if not settings.get("click_to_talk"):
+                self._press_global = None
+                return
             self._click_streak += 1
             self._click_reset_timer.start(2500)
             if self._click_streak >= 6:
@@ -597,9 +678,39 @@ class Pet(QWidget):
             self._settings_win = SettingsWindow()
             self._settings_win.changed.connect(self._on_settings_changed)
             self._settings_win.scale_changed.connect(self._on_scale_changed)
+            self._settings_win.opacity_changed.connect(self.setWindowOpacity)
+            self._settings_win.always_on_top_changed.connect(self._apply_on_top)
+            self._settings_win.clothing_changed.connect(lambda _: self._refresh_look())
+            self._settings_win.taskbar_changed.connect(lambda _: self._apply_on_top(
+                settings.get("always_on_top")))
+            self._settings_win.open_role_editor.connect(self.open_role_editor)
         self._settings_win.show()
         self._settings_win.raise_()
         self._settings_win.activateWindow()
+
+    def open_role_editor(self):
+        if getattr(self, "_role_editor", None) is None:
+            from role_editor import RoleEditorWindow
+            self._role_editor = RoleEditorWindow()
+            self._role_editor.changed.connect(self._on_settings_changed)
+        self._role_editor.show()
+        self._role_editor.raise_()
+        self._role_editor.activateWindow()
+
+    def _apply_on_top(self, on_top):
+        flags = Qt.FramelessWindowHint
+        if on_top:
+            flags |= Qt.WindowStaysOnTopHint
+        if not settings.get("show_in_taskbar"):
+            flags |= Qt.Tool          # Tool 不在任务栏显示
+        self.setWindowFlags(flags)
+        self.setWindowOpacity(float(settings.get("opacity")))
+        self.show()
+        self._place_bottom_right()
+
+    def _refresh_look(self):
+        self._pixmap_cache.clear()
+        self._apply_frame()
 
     def open_pomodoro(self):
         if self._pomodoro is None:

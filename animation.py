@@ -5,7 +5,8 @@
 """
 import os
 
-from paths import images_dir
+from paths import images_dir, support_path
+from settings import settings
 
 # 每个状态: (帧文件名列表, 每帧毫秒, 是否循环)
 # 单帧的动作(talk/stretch/dragged)靠 1 帧 + 不循环表现静态姿势。
@@ -35,18 +36,40 @@ STATES = {
 IDLE_BEHAVIORS = ["blink", "read", "think", "stretch", "wave", "headphones", "glasses", "sleep"]
 
 
+CLOTHING_IMAGE = {"hoodie": "hoodie.png", "polo": "polo.png", "jacket": "jacket.png"}
+
+
+def _custom_dir():
+    return support_path("PetImages")
+
+
+def _resolve(name):
+    """优先用户自定义图片,没有再用内置。"""
+    custom = os.path.join(_custom_dir(), name)
+    if os.path.exists(custom):
+        return custom
+    builtin = os.path.join(images_dir(), name)
+    return builtin if os.path.exists(builtin) else None
+
+
 def frame_paths(state):
+    # 服装:非默认卫衣时,idle 用对应站立单图(其它动作仍用默认帧)
+    clothing = settings.get("clothing")
+    if state == "idle" and clothing in ("polo", "jacket"):
+        p = _resolve(CLOTHING_IMAGE.get(clothing))
+        if p:
+            return [p]
+
     frames, _, _ = STATES.get(state, STATES["idle"])
-    d = images_dir()
     out = []
     for name in frames:
-        p = os.path.join(d, name)
-        if os.path.exists(p):
+        p = _resolve(name)
+        if p:
             out.append(p)
     if not out:  # 万一素材缺失,退回 idle 单帧,别崩
-        fallback = os.path.join(d, "idle.png")
-        if os.path.exists(fallback):
-            out = [fallback]
+        fb = _resolve("idle.png")
+        if fb:
+            out = [fb]
     return out
 
 
