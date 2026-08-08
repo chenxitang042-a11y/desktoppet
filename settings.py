@@ -24,7 +24,7 @@ _DEFAULTS = {
     "birthday": "",              # 生日 MM-DD,到日子它会说生日快乐
     "idle_sleep_seconds": 300,   # 离开多少秒后桌宠去睡觉
 
-    "pet_scale": 1.0,            # 角色显示倍率(原图约 98x116)
+    "pet_scale": 1.5,            # 角色显示倍率(原图约 98x116;超大时自动限制在屏幕40%内)
     "always_on_top": True,
 }
 

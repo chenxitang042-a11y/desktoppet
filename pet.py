@@ -9,7 +9,7 @@ import os
 import random
 import sys
 
-from PySide6.QtCore import Qt, QTimer, QPoint
+from PySide6.QtCore import Qt, QTimer, QPoint, QSize
 from PySide6.QtGui import QPixmap, QIcon, QAction, QTransform
 from PySide6.QtWidgets import (
     QApplication, QWidget, QLabel, QMenu, QSystemTrayIcon,
@@ -324,18 +324,38 @@ class Pet(QWidget):
 
     # ---------------- 素材 ----------------
     def _load_pixmap(self, path):
-        key = (path, self._facing_left)
+        key = (path, self._facing_left, round(self._scale, 3))
         if key in self._pixmap_cache:
             return self._pixmap_cache[key]
         pm = QPixmap(path)
         if not pm.isNull():
-            w = int(pm.width() * self._scale)
-            h = int(pm.height() * self._scale)
-            pm = pm.scaled(w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            screen = self.screen() or QApplication.primaryScreen()
+            dpr = screen.devicePixelRatio() or 1.0
+            avail = screen.availableGeometry()
+
+            # 目标"屏幕上看起来的高度"(逻辑像素)= 原图高 × 倍率
+            target_h = pm.height() * self._scale
+            # 永远不超过屏幕高度的 40%,避免满屏大头
+            max_h = avail.height() * 0.40
+            if target_h > max_h:
+                target_h = max_h
+            ratio = target_h / pm.height()
+            target_w = pm.width() * ratio
+
+            # 按物理像素渲染(× dpr)再标记 dpr,高分屏也清晰、且不会被二次放大
+            dev_w = max(1, int(round(target_w * dpr)))
+            dev_h = max(1, int(round(target_h * dpr)))
+            pm = pm.scaled(dev_w, dev_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             if not self._facing_left:
                 pm = pm.transformed(QTransform().scale(-1, 1))
+            pm.setDevicePixelRatio(dpr)
         self._pixmap_cache[key] = pm
         return pm
+
+    def _logical_size(self, pm):
+        dpr = pm.devicePixelRatio() or 1.0
+        return QSize(max(1, int(round(pm.width() / dpr))),
+                     max(1, int(round(pm.height() / dpr))))
 
     def _apply_frame(self):
         if not self._frames:
@@ -345,8 +365,9 @@ class Pet(QWidget):
         if pm.isNull():
             return
         self._label.setPixmap(pm)
-        self._label.resize(pm.size())
-        self.resize(pm.size())
+        size = self._logical_size(pm)
+        self._label.resize(size)
+        self.resize(size)
         self._reposition_bubble()
 
     def _set_state(self, state):
@@ -380,10 +401,15 @@ class Pet(QWidget):
 
     def _place_bottom_right(self):
         r = self._screen_rect()
-        self.move(r.right() - self.width() - 40, r.bottom() - self.height() - 10)
+        x = r.right() - self.width() - 40
+        x = max(r.left(), min(x, r.right() - self.width()))
+        self.move(x, self._ground_y())
 
     def _ground_y(self):
-        return self._screen_rect().bottom() - self.height() - 10
+        r = self._screen_rect()
+        y = r.bottom() - self.height() - 10
+        # 夹住,保证整只都在屏幕内
+        return max(r.top(), min(y, r.bottom() - self.height()))
 
     # ---------------- 行为调度 ----------------
     def _decide_behavior(self):
