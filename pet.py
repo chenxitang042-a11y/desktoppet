@@ -93,7 +93,7 @@ class Pet(QWidget):
         self._bubble = SpeechBubble()
 
         self._set_state("idle")
-        self._place_bottom_right()
+        self._placed = False
 
         # 帧推进定时器
         self._frame_timer = QTimer(self)
@@ -368,7 +368,16 @@ class Pet(QWidget):
         size = self._logical_size(pm)
         self._label.resize(size)
         self.resize(size)
+        self._clamp_on_screen()
         self._reposition_bubble()
+
+    def _clamp_on_screen(self):
+        """不管之前算成什么,强制把整只夹回屏幕可见区域。"""
+        r = self._screen_rect()
+        x = max(r.left(), min(self.x(), r.right() - self.width()))
+        y = max(r.top(), min(self.y(), r.bottom() - self.height()))
+        if x != self.x() or y != self.y():
+            self.move(x, y)
 
     def _set_state(self, state):
         self._state = state
@@ -397,13 +406,24 @@ class Pet(QWidget):
 
     # ---------------- 位置 ----------------
     def _screen_rect(self):
-        return QApplication.primaryScreen().availableGeometry()
+        screen = self.screen() or QApplication.primaryScreen()
+        return screen.availableGeometry()
 
     def _place_bottom_right(self):
         r = self._screen_rect()
         x = r.right() - self.width() - 40
         x = max(r.left(), min(x, r.right() - self.width()))
         self.move(x, self._ground_y())
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        # 窗口真正显示后再定位,这时屏幕和尺寸才准
+        if not self._placed:
+            self._placed = True
+            self._apply_frame()          # 用真实屏幕重新渲染一次(dpr 才对)
+            self._place_bottom_right()
+            # 再保险:下一轮事件循环里夹一次
+            QTimer.singleShot(0, self._place_bottom_right)
 
     def _ground_y(self):
         r = self._screen_rect()
