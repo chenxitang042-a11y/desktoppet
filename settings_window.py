@@ -22,28 +22,36 @@ from ui_widgets import (
 )
 
 _QSS = f"""
-QWidget {{ background:#F6F8FA; font-family:{FONT}; color:#2B2F36; }}
-QScrollArea {{ border:none; background:#F6F8FA; }}
-QTabWidget::pane {{ border:none; }}
+QWidget {{ background:#F2F3F5; font-family:{FONT}; color:#33353A; }}
+QScrollArea {{ border:none; background:#F2F3F5; }}
+QTabWidget::pane {{ border:none; background:#F2F3F5; }}
 QTabBar::tab {{
-    font-family:{FONT}; font-size:14px; padding:8px 18px; margin:4px 2px;
+    font-family:{FONT}; font-size:13px; padding:7px 20px; margin:6px 3px;
     background:transparent; color:#7A828C; border-radius:8px;
 }}
-QTabBar::tab:selected {{ background:#E9EEF6; color:{ACCENT}; font-weight:bold; }}
+QTabBar::tab:hover {{ background:#E9EBEF; }}
+QTabBar::tab:selected {{ background:#FFFFFF; color:{ACCENT}; font-weight:600;
+    border:1px solid #E7E9ED; }}
 QLineEdit, QComboBox, QTextEdit {{
-    background:#FFFFFF; border:1px solid #D8DEE8; border-radius:8px;
-    padding:7px 9px; font-size:14px;
+    background:#FFFFFF; border:1px solid #DFE2E7; border-radius:8px;
+    padding:7px 10px; font-size:14px; selection-background-color:{ACCENT};
 }}
-QLineEdit:focus, QComboBox:focus {{ border-color:{ACCENT}; }}
+QLineEdit:focus, QComboBox:focus, QTextEdit:focus {{ border-color:{ACCENT}; }}
+QComboBox::drop-down {{ border:none; width:22px; }}
 QPushButton {{
     font-size:14px; padding:9px 16px; border:none; border-radius:8px;
-    background:{ACCENT}; color:#FFFFFF; font-weight:bold;
+    background:{ACCENT}; color:#FFFFFF; font-weight:600;
 }}
 QPushButton:hover {{ background:#3468BC; }}
-QPushButton#ghost {{ background:#EEF1F5; color:#555; font-weight:normal; }}
-QPushButton#ghost:hover {{ background:#E2E7EE; }}
-QPushButton#danger {{ background:#FDEDED; color:#C0392B; font-weight:normal; }}
-QPushButton#danger:hover {{ background:#F9DCDC; }}
+QPushButton#ghost {{ background:#EEF0F3; color:#4A4F57; font-weight:normal; }}
+QPushButton#ghost:hover {{ background:#E4E7EC; }}
+QPushButton#danger {{ background:#FCECEC; color:#C0392B; font-weight:normal; }}
+QPushButton#danger:hover {{ background:#F7DCDC; }}
+QScrollBar:vertical {{ background:transparent; width:10px; margin:2px; }}
+QScrollBar::handle:vertical {{ background:#CFD3D9; border-radius:5px; min-height:30px; }}
+QScrollBar::handle:vertical:hover {{ background:#B9BEC6; }}
+QScrollBar::add-line, QScrollBar::sub-line {{ height:0; }}
+QScrollBar::add-page, QScrollBar::sub-page {{ background:transparent; }}
 """
 
 

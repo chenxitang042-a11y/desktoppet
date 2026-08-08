@@ -10,7 +10,18 @@ from PySide6.QtWidgets import (
 )
 
 ACCENT = "#3E7BD6"
-FONT = '"Microsoft YaHei", "微软雅黑", sans-serif'
+FONT = ('"Microsoft YaHei", "微软雅黑", "PingFang SC", '
+        '-apple-system, "Segoe UI", sans-serif')
+
+# macOS 风格配色
+BG = "#F2F3F5"
+CARD_BG = "#FFFFFF"
+BORDER = "#E7E9ED"
+DIVIDER = "#F0F1F4"
+TITLE = "#1D1D1F"
+TEXT = "#33353A"
+SUBTLE = "#8A8F98"
+TRACK_OFF = "#D6D9DE"
 
 
 class ToggleSwitch(QAbstractButton):
@@ -46,7 +57,7 @@ class ToggleSwitch(QAbstractButton):
         p.setRenderHint(QPainter.Antialiasing)
         w, h = self.width(), self.height()
         # 轨道
-        off = QColor("#C9CFD8")
+        off = QColor(TRACK_OFF)
         on = QColor(ACCENT)
         track = QColor(
             int(off.red() + (on.red() - off.red()) * self._pos),
@@ -88,8 +99,8 @@ class Segmented(QWidget):
             b.setStyleSheet(f"""
                 QPushButton {{
                     font-family:{FONT}; font-size:14px;
-                    padding:7px 14px; border:1px solid #D8DEE8;
-                    background:#FFFFFF; color:#555; {edge}
+                    padding:7px 14px; border:1px solid #DFE2E7;
+                    background:#FFFFFF; color:#5B6068; {edge}
                 }}
                 QPushButton:checked {{
                     background:{ACCENT}; color:#FFFFFF; border-color:{ACCENT};
@@ -109,7 +120,7 @@ class Card(QFrame):
     def __init__(self):
         super().__init__()
         self.setStyleSheet(
-            "QFrame{background:#FFFFFF;border:1px solid #ECEFF3;border-radius:12px;}")
+            f"QFrame{{background:{CARD_BG};border:1px solid {BORDER};border-radius:12px;}}")
         self._v = QVBoxLayout(self)
         self._v.setContentsMargins(18, 6, 18, 6)
         self._v.setSpacing(0)
@@ -120,7 +131,7 @@ class Card(QFrame):
     def add_divider(self):
         line = QFrame()
         line.setFixedHeight(1)
-        line.setStyleSheet("background:#F0F2F5;border:none;")
+        line.setStyleSheet(f"background:{DIVIDER};border:none;")
         self._v.addWidget(line)
 
 
@@ -133,11 +144,11 @@ class Row(QWidget):
         left = QVBoxLayout()
         left.setSpacing(2)
         t = QLabel(title)
-        t.setStyleSheet(f"font-family:{FONT};font-size:15px;color:#2B2F36;background:transparent;")
+        t.setStyleSheet(f"font-family:{FONT};font-size:15px;color:#33353A;background:transparent;")
         left.addWidget(t)
         if subtitle:
             s = QLabel(subtitle)
-            s.setStyleSheet(f"font-family:{FONT};font-size:12px;color:#9AA1AB;background:transparent;")
+            s.setStyleSheet(f"font-family:{FONT};font-size:12px;color:#8A8F98;background:transparent;")
             s.setWordWrap(True)
             left.addWidget(s)
         lay.addLayout(left, 1)
@@ -155,7 +166,7 @@ class SliderRow(QWidget):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 12, 0, 12)
         t = QLabel(title)
-        t.setStyleSheet(f"font-family:{FONT};font-size:15px;color:#2B2F36;background:transparent;")
+        t.setStyleSheet(f"font-family:{FONT};font-size:15px;color:#33353A;background:transparent;")
         lay.addWidget(t)
         lay.addSpacing(12)
         self._slider = QSlider(Qt.Horizontal)
@@ -175,7 +186,7 @@ class SliderRow(QWidget):
         self._val = QLabel(self._fmt(value))
         self._val.setFixedWidth(56)
         self._val.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self._val.setStyleSheet(f"font-family:{FONT};font-size:14px;color:#555;background:transparent;")
+        self._val.setStyleSheet(f"font-family:{FONT};font-size:14px;color:#8A8F98;background:transparent;")
         lay.addWidget(self._val)
         self._slider.valueChanged.connect(self._on_change)
 
@@ -190,7 +201,7 @@ class SliderRow(QWidget):
 def section_title(text):
     lbl = QLabel(text)
     lbl.setStyleSheet(
-        f"font-family:{FONT};font-size:16px;font-weight:bold;color:#1F2933;"
+        f"font-family:{FONT};font-size:16px;font-weight:600;color:#1D1D1F;"
         "background:transparent;margin-top:6px;")
     return lbl
 
@@ -199,5 +210,5 @@ def hint_label(text):
     lbl = QLabel(text)
     lbl.setWordWrap(True)
     lbl.setStyleSheet(
-        f"font-family:{FONT};font-size:12px;color:#9AA1AB;background:transparent;")
+        f"font-family:{FONT};font-size:12px;color:#8A8F98;background:transparent;")
     return lbl

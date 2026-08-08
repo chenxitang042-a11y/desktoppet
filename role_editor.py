@@ -17,9 +17,9 @@ from role_lines import role_lines
 from ui_widgets import ACCENT, FONT, Card, section_title, hint_label
 
 _QSS = f"""
-QWidget {{ background:#F6F8FA; font-family:{FONT}; color:#2B2F36; }}
+QWidget {{ background:#F2F3F5; font-family:{FONT}; color:#2B2F36; }}
 QLineEdit, QTextEdit {{
-    background:#FFFFFF; border:1px solid #D8DEE8; border-radius:8px;
+    background:#FFFFFF; border:1px solid #DFE2E7; border-radius:8px;
     padding:8px; font-size:14px;
 }}
 QLineEdit:focus, QTextEdit:focus {{ border-color:{ACCENT}; }}
@@ -28,7 +28,7 @@ QPushButton {{
     background:{ACCENT}; color:#FFFFFF; font-weight:bold;
 }}
 QPushButton:hover {{ background:#3468BC; }}
-QPushButton#ghost {{ background:#EEF1F5; color:#555; font-weight:normal; }}
+QPushButton#ghost {{ background:#EEF0F3; color:#4A4F57; font-weight:normal; }}
 QPushButton#ghost:hover {{ background:#E2E7EE; }}
 """
 
@@ -57,7 +57,7 @@ class RoleEditorWindow(QWidget):
 
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea{border:none;background:#F6F8FA;}")
+        scroll.setStyleSheet("QScrollArea{border:none;background:#F2F3F5;}")
         inner = QWidget()
         v = QVBoxLayout(inner)
         v.setContentsMargins(20, 18, 20, 18)

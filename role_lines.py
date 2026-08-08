@@ -9,12 +9,33 @@
 """
 import json
 import random
+import re
 import threading
 
 from paths import support_path
 from settings import settings
 from ai_client import client
 from role_profile import role
+
+
+# 用来切分"被挤在一行里的多句台词"的分隔符
+_SPLIT_RE = re.compile(r"\s*[/／|｜、;；]\s*|\s{2,}")
+
+
+def _split_options(text):
+    """把 '哦?/要去哪/喔——' 这种拆成多句;正常单句原样返回。"""
+    parts = [p for p in _SPLIT_RE.split(text) if p.strip()]
+    return parts if len(parts) > 1 else [text]
+
+
+def _one_utterance(text):
+    """兜底:无论如何只取一句短的,防止一次冒出一大串。"""
+    if not text:
+        return text
+    first = text.replace("\r", "\n").split("\n")[0].strip()
+    parts = _split_options(first)
+    out = parts[0].strip() if parts else first
+    return out[:30]
 
 
 # 需要生成台词的场景:标识 -> 情境说明。说明写清楚,生成才贴合。
@@ -133,7 +154,7 @@ class RoleLines:
         picked = random.choice(candidates)
         used.add(picked)
         self._used[scene] = used
-        return picked
+        return _one_utterance(picked)
 
     # ---- 生成(后台线程)----
     def generate_if_needed(self):
@@ -189,9 +210,12 @@ class RoleLines:
                     continue
                 sid, _, content = line.partition("|")
                 sid = sid.strip()
-                content = content.strip().strip("「」\"'·-*. 0123456789")
-                if sid in valid and content and len(content) <= 60:
-                    parsed.setdefault(sid, []).append(content)
+                content = content.strip()
+                if sid in valid and content:
+                    for piece in _split_options(content):
+                        piece = piece.strip().strip("「」\"'·-*. 0123456789")
+                        if piece and len(piece) <= 30:
+                            parsed.setdefault(sid, []).append(piece)
             if parsed:
                 self._fingerprint = fingerprint
                 self._lines = parsed
